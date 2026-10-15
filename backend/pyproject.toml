@@ -9,6 +9,9 @@ description = "Flood Rescue Dispatch backend (simulation + API)"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi",
+  "uvicorn",
+  "httpx",
+  "websockets",
   "pydantic>=2",
   "networkx",
 ]

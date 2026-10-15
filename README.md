@@ -21,3 +21,25 @@ pip install -e backend/
 pytest backend/tests -q
 python -m backend.app.simulation.run --scenario scenarios/baseline.json
 ```
+
+## Environment
+
+| File | Purpose |
+|---|---|
+| `backend/.env.example` | All backend vars with defaults (copy to `backend/.env`) |
+| `backend/.env` | Local backend dev (gitignored). Empty `DATABASE_URL` → sqlite file at `backend/data/flood_rescue.db`, no Postgres needed |
+| `frontend/.env.example` | Frontend vars template |
+| `frontend/.env.local` | Local dashboard dev (gitignored): `NEXT_PUBLIC_API_URL` must match the backend `PORT` |
+
+Backend vars: `DATABASE_URL`, `SIM_SEED` (last-resort seed), `HOST`/`PORT`
+(`py -m backend.app.main` serves with these), `CORS_ORIGINS` (comma-separated),
+`SNAPSHOT_EVERY`. Real env vars always override `.env` values; parsing lives in
+`backend/app/config.py` (stdlib only, no new dependency).
+
+```bash
+# backend API (http://localhost:8000, Swagger at /docs)
+py -m backend.app.main
+
+# dashboard (http://localhost:3000) — needs NEXT_PUBLIC_API_URL pointing at the API
+cd frontend && npm install && npm run dev
+```

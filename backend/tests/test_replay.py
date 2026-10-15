@@ -99,3 +99,146 @@ def test_scheduler_same_seed_same_sequence() -> None:
         return first + second
 
     assert run_once() == run_once()
+
+
+# --- Phase 6 Step 03 (additive): WS live view + deterministic replay ---
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture()
+def api_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", str(tmp_path / "replay_test.db"))
+    from backend.app.api import store
+    from backend.app.main import create_app
+    from backend.app.persistence import database as _database
+
+    store.clear_entries()
+    _database.reset_shared()
+    yield TestClient(create_app())
+    store.clear_entries()
+    _database.reset_shared()
+
+
+def _scenario_path() -> object:
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[2] / "scenarios" / "baseline.json"
+
+
+def test_ws_receives_ticks_in_order_with_matching_event_counts(
+    api_client: TestClient,
+) -> None:
+    client = api_client
+    resp = client.post(
+        "/api/simulations", json={"scenario_name": "baseline"}
+    )
+    assert resp.status_code == 200, resp.text
+    sim_id = resp.json()["simulation_id"]
+    assert client.post(f"/api/simulations/{sim_id}/start").status_code == 200
+    with client.websocket_connect(f"/ws/simulations/{sim_id}") as ws:
+        hello = ws.receive_json()
+        assert hello["tick"] == 0
+        assert hello["events"] == []
+        ticks: list[int] = []
+        frame_events = 0
+        for expected in range(1, 6):
+            ws.send_json({"action": "step", "steps": 1})
+            frame = ws.receive_json()
+            ticks.append(frame["tick"])
+            assert frame["tick"] == expected
+            frame_events += len(frame["events"])
+            assert {"tick", "state_digest", "events", "assignments_delta",
+                    "comms_digest"} <= set(frame)
+    assert ticks == [1, 2, 3, 4, 5]
+    rest = client.get(f"/api/simulations/{sim_id}/events")
+    assert rest.status_code == 200
+    assert rest.json()["count"] == frame_events
+
+
+def test_fixed_seed_replay_identical_event_order_and_winners() -> None:
+    import copy
+
+    from backend.app.simulation.replay import (
+        event_signature,
+        replay_simulation,
+        winners_signature,
+    )
+    from backend.app.simulation.run import build_simulation, load_scenario
+
+    data = load_scenario(_scenario_path())
+
+    def run_once() -> object:
+        sim = build_simulation(copy.deepcopy(data), seed=42)
+        sim.run(25)
+        return sim
+
+    first = run_once()
+    second = run_once()
+    assert event_signature(first) == event_signature(second)
+    assert winners_signature(first) == winners_signature(second)
+
+    injections = [
+        {"tick": 6, "kind": "CLOSURE", "payload": {"edge_id": "R-11"},
+         "event_id": "EVT-INJECT-0001"},
+    ]
+    replayed = replay_simulation(
+        copy.deepcopy(data), 42, "centralized", injections, 25
+    )
+    live = build_simulation(copy.deepcopy(data), seed=42)
+    for entry in injections:
+        from backend.app.simulation.replay import apply_injection
+
+        apply_injection(
+            live, entry["kind"], dict(entry["payload"]),
+            entry["tick"], entry["event_id"],
+        )
+    live.run(25)
+    assert event_signature(replayed) == event_signature(live)
+    assert winners_signature(replayed) == winners_signature(live)
+
+
+def test_replay_from_mid_snapshot_equals_uninterrupted_run() -> None:
+    import copy
+
+    from backend.app.simulation.replay import event_signature, replay_simulation
+    from backend.app.simulation.run import build_simulation, load_scenario
+
+    data = load_scenario(_scenario_path())
+    live = build_simulation(copy.deepcopy(data), seed=42)
+    live.run(30)
+    assert 20 in live.snapshots
+    resumed = replay_simulation(
+        copy.deepcopy(data), 42, "centralized", [], 30,
+        from_snapshot=live.snapshots[20],
+    )
+    assert resumed.tick == 30
+    assert event_signature(resumed) == event_signature(live)
+    assert resumed.world.to_dict() == live.world.to_dict()
+
+
+def test_metrics_recompute_after_replay_matches(api_client: TestClient) -> None:
+    client = api_client
+    resp = client.post(
+        "/api/simulations",
+        json={"scenario_name": "baseline", "strategy": "negotiation"},
+    )
+    assert resp.status_code == 200, resp.text
+    sim_id = resp.json()["simulation_id"]
+    client.post(f"/api/simulations/{sim_id}/start")
+    client.post(
+        f"/api/simulations/{sim_id}/events",
+        json={"kind": "CLOSURE", "payload": {"edge_id": "R-11"}},
+    )
+    client.post(f"/api/simulations/{sim_id}/step", json={"steps": 20})
+    live = client.get(f"/api/simulations/{sim_id}/metrics").json()
+    replay = client.post(f"/api/simulations/{sim_id}/replay", json={}).json()
+    assert replay["summary"]["served"] == live["served"]
+    assert replay["summary"]["committed"] == live["committed"]
+    assert replay["summary"]["rejected_by_reason"] == live["rejected_by_reason"]
+    mid = client.post(
+        f"/api/simulations/{sim_id}/replay", json={"from_snapshot_tick": 10}
+    )
+    assert mid.status_code == 200, mid.text
+    assert mid.json()["summary"]["served"] == live["served"]
