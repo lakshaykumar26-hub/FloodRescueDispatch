@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flood-rescue-dispatch-backend"
+version = "0.1.0"
+description = "Flood Rescue Dispatch backend (simulation + API)"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi",
+  "pydantic>=2",
+  "networkx",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+dev = ["ruff", "pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.ruff]
+target-version = "py311"
