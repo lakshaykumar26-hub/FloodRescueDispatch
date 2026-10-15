@@ -47,6 +47,8 @@ export interface UseSimulation {
   error: string | null;
   speed: number;
   setSpeed: (s: number) => void;
+  /** Current auto-step cadence in ms (drives the next-tick progress bar). */
+  pollIntervalMs: number;
   create: (strategy: Strategy, scenario?: string) => Promise<void>;
   start: () => Promise<void>;
   pause: () => Promise<void>;
@@ -308,6 +310,7 @@ export function useSimulation(): UseSimulation {
     error,
     speed,
     setSpeed,
+    pollIntervalMs: POLL_BY_SPEED[speed] ?? 2000,
     create,
     start,
     pause,

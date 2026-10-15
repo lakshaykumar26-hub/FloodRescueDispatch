@@ -23,6 +23,7 @@ const sim = vi.hoisted(() => ({
   error: null as string | null,
   speed: 1,
   setSpeed: vi.fn(),
+  pollIntervalMs: 2000,
   create: vi.fn(),
   start: vi.fn(),
   pause: vi.fn(),
@@ -56,7 +57,7 @@ describe("DashboardPage", () => {
   it("renders the command header with tick/status/backend badges", () => {
     render(<DashboardPage />);
     expect(screen.getByText("Flood Rescue Dispatch — Command Dashboard")).toBeInTheDocument();
-    expect(screen.getByText(/tick: 60/)).toBeInTheDocument();
+    expect(screen.getByText("60", { selector: ".tick-pop" })).toBeInTheDocument();
     expect(screen.getByText(/status: running/)).toBeInTheDocument();
     expect(screen.getByText(/backend unreachable — DEMO data/)).toBeInTheDocument();
   });
@@ -95,5 +96,20 @@ describe("DashboardPage", () => {
     render(<DashboardPage />);
     expect(screen.getByText(/Deterministic ticks only/)).toBeInTheDocument();
     expect(screen.getByText(/PROPOSED→COMMITTED/)).toBeInTheDocument();
+  });
+
+  it("fills a next-tick progress bar while running, hidden otherwise", () => {
+    sim.status = "running";
+    const { container } = render(<DashboardPage />);
+    const bar = container.querySelector(".tick-progress") as HTMLElement;
+    expect(bar).not.toBeNull();
+    expect(bar.style.animationDuration).toBe("2000ms");
+    expect(screen.getByText("60", { selector: ".tick-pop" })).toBeInTheDocument();
+  });
+
+  it("hides the progress bar when not running", () => {
+    sim.status = "idle";
+    const { container } = render(<DashboardPage />);
+    expect(container.querySelector(".tick-progress")).toBeNull();
   });
 });

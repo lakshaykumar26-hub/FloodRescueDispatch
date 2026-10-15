@@ -5,3 +5,84 @@
 body {
   @apply bg-slate-950 text-slate-100;
 }
+
+/* ---- Tick-motion animation (pure CSS, no JS per-frame work) ---- */
+
+/* Resource markers glide between node positions when the world updates. */
+.marker-glide {
+  transition: transform 0.65s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Planned / changed routes march in travel direction. */
+@keyframes route-march {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+.route-march {
+  stroke-dasharray: 7 5;
+  animation: route-march 0.9s linear infinite;
+}
+.route-march-changed {
+  stroke-dasharray: 10 4;
+  animation: route-march 0.7s linear infinite;
+}
+
+/* Just-arrived incidents ping until the next tick. */
+@keyframes incident-ping {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.4);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+.incident-ping {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: incident-ping 1.2s ease-out infinite;
+  pointer-events: none;
+}
+
+/* Header tick badge pops on every tick change (remounted via key). */
+@keyframes tick-pop {
+  0% {
+    transform: scale(1.3);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.tick-pop {
+  display: inline-block;
+  animation: tick-pop 0.35s ease-out;
+}
+
+/* Next-tick progress: fills over one poll interval, restarts each tick. */
+@keyframes tick-fill {
+  from {
+    width: 0%;
+  }
+  to {
+    width: 100%;
+  }
+}
+.tick-progress {
+  animation-name: tick-fill;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marker-glide,
+  .route-march,
+  .route-march-changed,
+  .incident-ping,
+  .tick-pop,
+  .tick-progress {
+    animation: none;
+    transition: none;
+  }
+}

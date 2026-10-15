@@ -69,7 +69,12 @@ export default function DashboardPage() {
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2 text-xs">
           <span className="rounded bg-slate-800 px-2 py-1">sim: {sim.simulationId ?? "—"}</span>
-          <span className="rounded bg-slate-800 px-2 py-1">tick: {scrubTick ?? sim.tick}</span>
+          <span className="rounded bg-slate-800 px-2 py-1">
+            tick:{" "}
+            <span key={scrubTick ?? sim.tick} className="tick-pop">
+              {scrubTick ?? sim.tick}
+            </span>
+          </span>
           <span className="rounded bg-slate-800 px-2 py-1">status: {sim.status}</span>
           <span className={`rounded px-2 py-1 ${sim.backendReachable ? "bg-emerald-800" : "bg-amber-800"}`}>
             {!sim.backendReachable
@@ -84,6 +89,18 @@ export default function DashboardPage() {
       {sim.error && (
         <div className="mb-2 rounded border border-amber-700 bg-amber-900/30 p-2 text-xs text-amber-200" role="alert">
           {sim.error}
+        </div>
+      )}
+
+      {/* Next-tick progress: fills over one auto-step interval, restarts each
+        tick. A full-but-stalled bar means ticks stopped arriving. */}
+      {sim.status === "running" && (
+        <div className="mb-2 h-1 overflow-hidden rounded bg-slate-800" aria-hidden="true">
+          <div
+            key={sim.tick}
+            className="tick-progress h-1 rounded bg-emerald-400"
+            style={{ animationDuration: `${sim.pollIntervalMs}ms` }}
+          />
         </div>
       )}
 
@@ -115,6 +132,7 @@ export default function DashboardPage() {
             selectedIncidentId={selectedIncident}
             selectedResourceId={selectedResource}
             disconnectedIds={disconnectedIds}
+            tick={scrubTick ?? sim.tick}
             onSelectIncident={(id) => {
               setSelectedIncident(id);
               const asn = sim.assignments.find((a) => a.incident_id === id);

@@ -4,7 +4,7 @@
  * Pure-SVG synthetic map. No tile/network dependency: renders entirely from
  * scenario node x/y, so blocking map tiles cannot break it (Phase 6 gate).
  */
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Edge, WorldState } from "../types";
 
 const W = 760;
@@ -25,6 +25,9 @@ interface Props {
   selectedIncidentId?: string | null;
   selectedResourceId?: string | null;
   disconnectedIds?: string[];
+  /** Current tick: markers glide on world change; incidents created this
+   * tick ping until the next tick. Omit to render statically. */
+  tick?: number;
   onSelectIncident?: (id: string) => void;
   onSelectResource?: (id: string) => void;
 }
@@ -36,9 +39,17 @@ export default function SyntheticMap({
   selectedIncidentId = null,
   selectedResourceId = null,
   disconnectedIds = [],
+  tick,
   onSelectIncident,
   onSelectResource,
 }: Props) {
+  // Enable glide transitions only after first paint so the initial render
+  // does not animate markers flying in from the origin.
+  const [glide, setGlide] = useState(false);
+  useEffect(() => {
+    const id = window.setTimeout(() => setGlide(true), 80);
+    return () => window.clearTimeout(id);
+  }, []);
   const nodePos = useMemo(() => {
     const maxX = Math.max(1, ...world.nodes.map((n) => n.x));
     const maxY = Math.max(1, ...world.nodes.map((n) => n.y));
@@ -121,7 +132,17 @@ export default function SyntheticMap({
           return (
             <g key={e.edge_id}>
               <title>{`${e.edge_id} ${e.mode} ${e.status} tt=${e.travel_time}`}</title>
-              <line x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} stroke={stroke} strokeWidth={width} strokeDasharray={dash} strokeLinecap="round" />
+              <line
+                x1={a[0]}
+                y1={a[1]}
+                x2={b[0]}
+                y2={b[1]}
+                stroke={stroke}
+                strokeWidth={width}
+                strokeDasharray={isSelected || isChanged ? undefined : dash}
+                strokeLinecap="round"
+                className={isSelected ? "route-march" : isChanged ? "route-march-changed" : undefined}
+              />
               {e.status === "disputed" && (
                 <text x={(a[0] + b[0]) / 2} y={(a[1] + b[1]) / 2 - 6} fontSize={13} textAnchor="middle">⚠</text>
               )}
@@ -150,17 +171,23 @@ export default function SyntheticMap({
           if (!p) return null;
           const ox = 14 + (idx % 3) * 4;
           const selected = selectedIncidentId === inc.incident_id;
+          const justArrived = tick !== undefined && inc.created_tick >= tick;
           return (
             <g
               key={inc.incident_id}
+              transform={`translate(${p[0]} ${p[1]})`}
+              className={glide ? "marker-glide" : undefined}
               onClick={() => onSelectIncident?.(inc.incident_id)}
               style={{ cursor: onSelectIncident ? "pointer" : "default" }}
             >
               <title>{`${inc.incident_id} u=${inc.urgency} ppl=${inc.people} ${inc.status}`}</title>
-              <circle cx={p[0] + ox} cy={p[1] + 12} r={selected ? 11 : 8} fill={urgencyColor(inc.urgency)} stroke={selected ? "#fff" : "#0f172a"} strokeWidth={selected ? 2.5 : 1.5} />
-              <text x={p[0] + ox} y={p[1] + 16} fontSize={9} fontWeight="bold" textAnchor="middle" fill="#0f172a">{inc.urgency}</text>
+              {justArrived && (
+                <circle cx={ox} cy={12} r={10} fill="none" stroke={urgencyColor(inc.urgency)} strokeWidth={2} className="incident-ping" />
+              )}
+              <circle cx={ox} cy={12} r={selected ? 11 : 8} fill={urgencyColor(inc.urgency)} stroke={selected ? "#fff" : "#0f172a"} strokeWidth={selected ? 2.5 : 1.5} />
+              <text x={ox} y={16} fontSize={9} fontWeight="bold" textAnchor="middle" fill="#0f172a">{inc.urgency}</text>
               {inc.kind === "recovery" && (
-                <text x={p[0] + ox + 10} y={p[1] + 8} fontSize={11}>🛟</text>
+                <text x={ox + 10} y={8} fontSize={11}>🛟</text>
               )}
             </g>
           );
@@ -173,12 +200,18 @@ export default function SyntheticMap({
           const disc = disconnectedSet.has(b.boat_id);
           const selected = selectedResourceId === b.boat_id;
           return (
-            <g key={b.boat_id} onClick={() => onSelectResource?.(b.boat_id)} style={{ cursor: onSelectResource ? "pointer" : "default" }}>
+            <g
+              key={b.boat_id}
+              transform={`translate(${p[0]} ${p[1]})`}
+              className={glide ? "marker-glide" : undefined}
+              onClick={() => onSelectResource?.(b.boat_id)}
+              style={{ cursor: onSelectResource ? "pointer" : "default" }}
+            >
               <title>{`${b.boat_id} ${b.status} fuel=${b.fuel}`}</title>
-              <rect x={p[0] - 22} y={p[1] - 22} width={17} height={13} rx={2} fill={failed ? "#ef4444" : disc ? "#64748b" : "#0ea5e9"} stroke={selected ? "#fff" : "#0f172a"} strokeWidth={selected ? 2.5 : 1.5} />
-              <text x={p[0] - 13.5} y={p[1] - 11.5} fontSize={7.5} textAnchor="middle" fill="#fff">⛵</text>
+              <rect x={-22} y={-22} width={17} height={13} rx={2} fill={failed ? "#ef4444" : disc ? "#64748b" : "#0ea5e9"} stroke={selected ? "#fff" : "#0f172a"} strokeWidth={selected ? 2.5 : 1.5} />
+              <text x={-13.5} y={-11.5} fontSize={7.5} textAnchor="middle" fill="#fff">⛵</text>
               {(failed || disc) && (
-                <text x={p[0] - 22} y={p[1] - 24} fontSize={10}>{failed ? "🔥" : "📡✕"}</text>
+                <text x={-22} y={-24} fontSize={10}>{failed ? "🔥" : "📡✕"}</text>
               )}
             </g>
           );
@@ -189,10 +222,16 @@ export default function SyntheticMap({
           if (!p) return null;
           const selected = selectedResourceId === t.team_id;
           return (
-            <g key={t.team_id} onClick={() => onSelectResource?.(t.team_id)} style={{ cursor: onSelectResource ? "pointer" : "default" }}>
+            <g
+              key={t.team_id}
+              transform={`translate(${p[0]} ${p[1]})`}
+              className={glide ? "marker-glide" : undefined}
+              onClick={() => onSelectResource?.(t.team_id)}
+              style={{ cursor: onSelectResource ? "pointer" : "default" }}
+            >
               <title>{`${t.team_id} ${t.status}`}</title>
               <polygon
-                points={`${p[0] + 20},${p[1] + 20} ${p[0] + 28},${p[1] + 20} ${p[0] + 24},${p[1] + 12}`}
+                points="20,20 28,20 24,12"
                 fill="#facc15"
                 stroke={selected ? "#fff" : "#0f172a"}
                 strokeWidth={selected ? 2.5 : 1.5}

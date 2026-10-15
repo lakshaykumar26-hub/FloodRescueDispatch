@@ -1,5 +1,5 @@
 /** SyntheticMap: pure-SVG rendering, edge styles, badges, selection. No tile stack. */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -75,5 +75,54 @@ describe("SyntheticMap", () => {
     } as typeof DEMO_WORLD;
     render(<SyntheticMap world={world} />);
     expect(screen.getByText("🛟")).toBeInTheDocument();
+  });
+
+  it("glides markers via CSS transform after first paint, without animating mount", () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(<SyntheticMap world={DEMO_WORLD} />);
+      expect(container.querySelector("g.marker-glide")).toBeNull(); // no fly-in from origin
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(container.querySelectorAll("g.marker-glide").length).toBeGreaterThan(0);
+
+      const posOf = () => {
+        const title = screen.getByText("BOAT-01 EN_ROUTE_TO_INCIDENT fuel=52", { selector: "title" });
+        return title.closest("g")?.getAttribute("transform");
+      };
+      const before = posOf();
+      const moved = {
+        ...DEMO_WORLD,
+        boats: DEMO_WORLD.boats.map((b) =>
+          b.boat_id === "BOAT-01" ? { ...b, node_id: "N-11" } : b,
+        ),
+      };
+      rerender(<SyntheticMap world={moved} />);
+      expect(posOf()).not.toBe(before); // browser interpolates between the two
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marches selected/changed routes and pings just-arrived incidents", () => {
+    const { container, rerender } = render(
+      <SyntheticMap world={DEMO_WORLD} selectedRouteEdgeIds={["W-02"]} changedRouteEdgeIds={["R-05"]} tick={12} />,
+    );
+    expect(container.querySelector("line.route-march")).not.toBeNull();
+    expect(container.querySelector("line.route-march-changed")).not.toBeNull();
+    // INC-08 (created_tick 12) arrived this tick → ping ring.
+    expect(container.querySelector("circle.incident-ping")).not.toBeNull();
+    rerender(<SyntheticMap world={DEMO_WORLD} />);
+    expect(container.querySelector("line.route-march")).toBeNull();
+    expect(container.querySelector("circle.incident-ping")).toBeNull(); // no tick → static
+  });
+
+  it("ships the tick-motion keyframes with a reduced-motion escape hatch", () => {
+    const css = readFileSync(resolve(__dirname, "../app/globals.css"), "utf8");
+    for (const name of ["route-march", "incident-ping", "tick-pop", "tick-fill"]) {
+      expect(css).toContain(`@keyframes ${name}`);
+    }
+    expect(css).toContain("prefers-reduced-motion");
   });
 });
