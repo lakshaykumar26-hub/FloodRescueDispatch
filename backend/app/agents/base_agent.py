@@ -38,6 +38,10 @@ class BaseAgent:
             "assignments": [],
             "belief_version": 0,
         }
+        #: World tick of the snapshot/message that last refreshed the
+        #: belief (Step 05 partition probe: a partitioned agent's
+        #: ``world_tick_at_read`` stays behind the global tick).
+        self.world_tick_at_read: int = 0
         self.inbox: list = []
         self.audit: list = []
 
@@ -53,6 +57,8 @@ class BaseAgent:
         self.local_belief["shelters"] = copy.deepcopy(snapshot.get("shelters", {}))
         self.local_belief["assignments"] = copy.deepcopy(snapshot.get("assignments", []))
         self.local_belief["belief_version"] += 1
+        tick_read = snapshot.get("tick", snapshot.get("world_tick", 0))
+        self.world_tick_at_read = int(tick_read) if tick_read is not None else 0
 
     def update_belief(self, message: dict) -> bool:
         """Apply a versioned belief message; ignore stale ones.
@@ -79,6 +85,10 @@ class BaseAgent:
         if "assignments" in message:
             self.local_belief["assignments"] = copy.deepcopy(message["assignments"])
         self.local_belief["belief_version"] = version
+        world_tick = message.get("world_tick", message.get("tick", self.world_tick_at_read))
+        self.world_tick_at_read = (
+            int(world_tick) if world_tick is not None else self.world_tick_at_read
+        )
         self.audit.append(
             {
                 "event": "BELIEF_UPDATED",

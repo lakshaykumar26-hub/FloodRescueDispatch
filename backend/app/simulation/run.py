@@ -89,6 +89,7 @@ def build_simulation(
     simulation = Simulation(
         world, seed=simulation_seed, snapshot_every=snapshot_every,
         scheduler=scheduler,
+        network_config=dict(data.get("network", {}) or {}),
     )
     for event in data.get("events", []):
         simulation.manager.scheduler.push(

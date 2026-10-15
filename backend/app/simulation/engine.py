@@ -18,6 +18,7 @@ from ..dispatch.commitment_manager import (
     cancel,
     commit_assignment,
     complete,
+    flag_reconciliation,
     reassign_shelter,
     start_progress,
     trigger_recovery,
@@ -36,6 +37,174 @@ from .clock import Clock
 from .snapshots import restore, take_snapshot
 from .state_manager import StateManager
 from .world import World
+
+# Phase 5 Step 05: engine publishes belief snapshots through the
+# store-and-forward gateway; mirror agents hold the only beliefs the
+# negotiation scheduler may bid from. simulation/ must still import no
+# FastAPI/DB/frontend code — agents + communications are allowed.
+from ..agents.boat_agent import BoatAgent
+from ..agents.ground_team_agent import GroundTeamAgent
+from ..communications.deduplicator import Deduplicator
+from ..communications.gateway import Gateway
+from ..communications.simulated_network import SimulatedNetwork
+from ..dispatch.negotiation_scheduler import world_to_belief_snapshot
+
+try:
+    from ..communications.comms_bridge import (
+        COORDINATOR_ID,
+        belief_payload_from_snapshot,
+        build_agent_report,
+        build_authority,
+        deliver_to_agent,
+        make_belief_message,
+        to_belief_update,
+    )
+except ImportError:  # comms_bridge.py not yet present: local fallbacks.
+    import copy as _copy
+
+    COORDINATOR_ID = "DISPATCH-01"
+
+    def belief_payload_from_snapshot(snapshot: dict, world_tick: int) -> dict:
+        return {
+            "edges": _copy.deepcopy(snapshot.get("edges", {})),
+            "shelters": _copy.deepcopy(snapshot.get("shelters", {})),
+            "assignments": _copy.deepcopy(snapshot.get("assignments", [])),
+            "world_tick": int(world_tick),
+        }
+
+    def make_belief_message(
+        sender: str,
+        recipient: str,
+        snapshot: dict,
+        tick: int,
+        version: int,
+        seq: int,
+        simulation_id: str = "SIM-001",
+        ttl: int = 10,
+    ) -> dict:
+        tick_i = int(tick)
+        try:
+            world_tick = int(snapshot.get("tick", snapshot.get("world_tick", tick_i)))
+        except (TypeError, ValueError):
+            world_tick = tick_i
+        payload = belief_payload_from_snapshot(snapshot, world_tick)
+        payload = {"assignment_id": "-", "reason": "BELIEF_SYNC", **payload}
+        return {
+            "message_id": f"MSG-BELIEF-{tick_i:04d}-{int(seq):04d}",
+            "type": "BOAT_STATUS_CHANGED",
+            "sender_id": str(sender),
+            "recipient_id": str(recipient),
+            "simulation_id": str(simulation_id),
+            "created_at_tick": tick_i,
+            "expires_at_tick": tick_i + int(ttl),
+            "version": int(version),
+            "payload": payload,
+        }
+
+    def to_belief_update(msg_dict: dict) -> dict:
+        payload = msg_dict.get("payload", {}) or {}
+        try:
+            created = int(msg_dict.get("created_at_tick", 0))
+        except (TypeError, ValueError):
+            created = 0
+        world_tick = payload.get("world_tick", created)
+        try:
+            world_tick = int(world_tick)
+        except (TypeError, ValueError):
+            world_tick = created
+        try:
+            version = int(msg_dict.get("version", 0))
+        except (TypeError, ValueError):
+            version = 0
+        return {
+            "message_id": msg_dict.get("message_id"),
+            "type": msg_dict.get("type"),
+            "version": version,
+            "edges": _copy.deepcopy(payload.get("edges") or {}),
+            "shelters": _copy.deepcopy(payload.get("shelters") or {}),
+            "assignments": _copy.deepcopy(payload.get("assignments") or []),
+            "tick": created,
+            "world_tick": world_tick,
+        }
+
+    def build_agent_report(
+        agent: Any, service_entry: dict | None, assignment_registry: dict
+    ) -> dict:
+        agent_id = str(getattr(agent, "id", "?"))
+        belief = getattr(agent, "local_belief", {}) or {}
+        if not isinstance(belief, dict):
+            belief = {}
+        assignment_id = None
+        if isinstance(service_entry, dict):
+            aid = service_entry.get("assignment_id")
+            if isinstance(aid, str):
+                assignment_id = aid
+        assignment_version = None
+        assignment = (assignment_registry or {}).get(assignment_id)
+        if assignment is not None:
+            raw = (
+                assignment.get("version")
+                if isinstance(assignment, dict)
+                else getattr(assignment, "version", None)
+            )
+            try:
+                assignment_version = int(raw) if raw is not None else None
+            except (TypeError, ValueError):
+                assignment_version = None
+        return {
+            "agent_id": agent_id,
+            "resource_id": agent_id,
+            "belief_version": int(belief.get("belief_version", 0) or 0),
+            "assignment_id": assignment_id,
+            "assignment_version": assignment_version,
+            "local_claims": [],
+        }
+
+    def build_authority(
+        assignments: dict,
+        routes: dict,
+        tick: int,
+        partition_started_tick: int | None,
+    ) -> dict:
+        auth: dict[str, dict] = {}
+        for aid, rec in (assignments or {}).items():
+            if isinstance(rec, dict):
+                auth[str(aid)] = {
+                    "status": str(rec.get("status")),
+                    "version": int(rec.get("version", 0) or 0),
+                    "resource_id": str(rec.get("resource_id", "")),
+                    "incident_id": str(rec.get("incident_id", "")),
+                }
+            else:
+                auth[str(aid)] = {
+                    "status": str(getattr(rec, "status", "")),
+                    "version": int(getattr(rec, "version", 0) or 0),
+                    "resource_id": str(getattr(rec, "resource_id", "")),
+                    "incident_id": str(getattr(rec, "incident_id", "")),
+                }
+        auth_routes: dict[str, dict] = {}
+        for rid, route in (routes or {}).items():
+            if isinstance(route, dict):
+                edges = route.get("edge_ids", route.get("route_edge_ids", []))
+                try:
+                    edge_list = [str(e) for e in (edges or [])]
+                except TypeError:
+                    edge_list = []
+                auth_routes[str(rid)] = {"edge_ids": edge_list, "next_index": 0}
+        return {
+            "tick": int(tick),
+            "assignments": auth,
+            "routes": auth_routes,
+            "partition_started_tick": partition_started_tick,
+        }
+
+    def deliver_to_agent(agent: Any, msg_dict: dict, dedup: Any, tick: int) -> str:
+        _ = tick
+        message_id = str(msg_dict.get("message_id", "?"))
+        if dedup.check(message_id) == "DUPLICATE":
+            return "DUPLICATE"
+        applied = agent.update_belief(to_belief_update(msg_dict))
+        return "APPLIED" if applied else "STALE_IGNORED"
 
 _ACTIVE_INCIDENT_STATUSES = ("OPEN", "ASSIGNED", "IN_PROGRESS")
 
@@ -160,6 +329,8 @@ class Simulation:
         seed: int = 42,
         snapshot_every: int = 10,
         scheduler: Scheduler | None = None,
+        network_config: dict | None = None,
+        enable_comms: bool = True,
     ) -> None:
         self.world = world
         self.seed = seed
@@ -169,6 +340,26 @@ class Simulation:
         self.scheduler: Scheduler = (
             scheduler if scheduler is not None else CentralizedScheduler()
         )
+        # Phase 5 Step 05: store-and-forward comms. The engine publishes
+        # one belief message per mirror agent per tick through the gateway;
+        # beliefs reach scheduler agents only via gateway delivery (never
+        # via a direct global read).
+        self.network = SimulatedNetwork(
+            seed=seed, config=dict(network_config) if network_config else {}
+        )
+        self.gateway = Gateway(self.network, simulation_id="SIM-001")
+        self.enable_comms = bool(enable_comms)
+        # Lightweight BoatAgent/GroundTeamAgent mirrors for belief
+        # tracking, independent of the scheduler's own agents.
+        self.comms_agents: dict[str, Any] = {}
+        # Consumer-side dedup, one per mirror agent.
+        self._consumer_dedup: dict[str, Deduplicator] = {}
+        # agent_id -> tick its current partition span started.
+        self._partition_started: dict[str, int] = {}
+        self._msg_seq = 0
+        self.reconciliation_log: list[dict] = []
+        if self.enable_comms:
+            self._comms_patch_scheduler()
         self.snapshots: dict[int, dict] = {}
         self._assignment_seq = 0
         self.assignments: dict[str, Assignment] = {}
@@ -234,7 +425,95 @@ class Simulation:
         simulation.manager.reports = ReportStore.from_dict(
             dict(data.get("reports", {"threshold": 0.5, "claims": []}))
         )
+        simulation._restore_comms(data)
         return simulation
+
+    def _restore_comms(self, data: dict) -> None:
+        """Restore gateway/network/mirror beliefs from a step snapshot.
+
+        Backward compatible: keys absent in pre-comms snapshots fall back
+        to a fresh network/gateway and freshly ensured mirrors.
+        """
+        network: Any = None
+        raw_network = data.get("network")
+        if isinstance(raw_network, dict):
+            try:
+                network = SimulatedNetwork.from_dict(raw_network)
+            except Exception:
+                network = None
+        if network is None:
+            try:
+                embedded = (data.get("gateway") or {}).get("network")
+            except Exception:
+                embedded = None
+            if isinstance(embedded, dict):
+                try:
+                    network = SimulatedNetwork.from_dict(embedded)
+                except Exception:
+                    network = None
+        if network is None:
+            network = SimulatedNetwork(
+                seed=int(data.get("seed", self.seed)), config={}
+            )
+        self.network = network
+        raw_gateway = data.get("gateway")
+        if isinstance(raw_gateway, dict):
+            try:
+                self.gateway = Gateway.from_dict(raw_gateway, self.network)
+            except Exception:
+                self.gateway = Gateway(self.network, simulation_id="SIM-001")
+        try:
+            self._msg_seq = int(data.get("msg_seq", 0) or 0)
+        except (TypeError, ValueError):
+            self._msg_seq = 0
+        try:
+            self.reconciliation_log = copy.deepcopy(
+                data.get("reconciliation_log", [])
+            )
+        except Exception:
+            self.reconciliation_log = []
+        restored_spans = data.get("partition_started", {})
+        if isinstance(restored_spans, dict):
+            try:
+                self._partition_started = {
+                    str(aid): int(tick)
+                    for aid, tick in restored_spans.items()
+                }
+            except (TypeError, ValueError):
+                self._partition_started = {}
+        else:
+            self._partition_started = {}
+        self._consumer_dedup = {}
+        restored_dedup = data.get("consumer_dedup", {})
+        if isinstance(restored_dedup, dict):
+            for aid, payload in restored_dedup.items():
+                try:
+                    self._consumer_dedup[str(aid)] = Deduplicator.from_dict(
+                        dict(payload)
+                    )
+                except Exception:
+                    self._consumer_dedup[str(aid)] = Deduplicator()
+        try:
+            self._comms_ensure_agents()
+        except Exception:
+            pass
+        saved_agents = data.get("comms_agents", {})
+        if isinstance(saved_agents, dict):
+            for aid, payload in saved_agents.items():
+                agent = self.comms_agents.get(str(aid))
+                if agent is None or not isinstance(payload, dict):
+                    continue
+                try:
+                    agent.local_belief = copy.deepcopy(
+                        payload.get("local_belief", agent.local_belief)
+                    )
+                    agent.world_tick_at_read = int(
+                        payload.get("world_tick_at_read", 0) or 0
+                    )
+                except (TypeError, ValueError):
+                    continue
+                except Exception:
+                    continue
 
     # -- helpers ------------------------------------------------------
     def _next_assignment_id(self) -> str:
@@ -265,6 +544,353 @@ class Simulation:
             for incident in self.world.incidents.values()
         )
 
+    # -- comms wiring (Phase 5 Step 05) -----------------------------------
+    def _comms_patch_scheduler(self) -> None:
+        """Gate negotiation beliefs through the gateway mirrors.
+
+        Replaces the negotiation scheduler's ``_sync_agents`` so boat/team
+        position + status still refresh from ``world`` (movement truth),
+        but their ``local_belief`` comes from this engine's gateway-fed
+        mirror agents (deep-copied) instead of a fresh global snapshot.
+        Incident/shelter agents keep the original behavior (they never
+        bid from belief edges). Idempotent; no-op for schedulers without
+        ``_sync_agents`` (e.g. centralized). Never raises.
+        """
+        try:
+            sched = self.scheduler
+            if not hasattr(sched, "_sync_agents"):
+                return
+            if getattr(sched, "_sync_agents_patched_by_engine", False):
+                return
+            original = sched._sync_agents
+            engine = self
+
+            def _patched(world: Any, tick: int) -> None:
+                try:
+                    original(world, tick)
+                except Exception:
+                    return
+                try:
+                    engine._comms_sync_scheduler_beliefs(tick)
+                except Exception:
+                    pass
+
+            sched._sync_agents = _patched  # type: ignore[method-assign]
+            try:
+                sched._sync_agents_patched_by_engine = True  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _comms_sync_scheduler_beliefs(self, tick: int) -> None:
+        """Push gateway mirror beliefs into scheduler resource agents.
+
+        For every scheduler agent whose id has a comms mirror, replace
+        its ``local_belief`` (deep copy) and ``world_tick_at_read`` with
+        the mirror's. A partitioned mirror's belief stays frozen, so the
+        scheduler bids from stale belief — never from fresh global state.
+        No-op when the scheduler holds no ``agents`` dict. Never raises.
+        """
+        _ = tick
+        try:
+            agents = getattr(self.scheduler, "agents", None)
+            if not isinstance(agents, dict):
+                return
+            for aid, sched_agent in agents.items():
+                mirror = self.comms_agents.get(aid)
+                if mirror is None or sched_agent is None:
+                    continue
+                try:
+                    sched_agent.local_belief = copy.deepcopy(mirror.local_belief)
+                    sched_agent.world_tick_at_read = int(
+                        getattr(mirror, "world_tick_at_read", 0) or 0
+                    )
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _comms_ensure_agents(self) -> None:
+        """Ensure one mirror agent per world boat/team.
+
+        Creates missing ``BoatAgent``/``GroundTeamAgent`` mirrors and
+        refreshes position/status (plus capacity/fuel/passengers/
+        capabilities) from the world each tick BEFORE publish, so beliefs
+        track movement truth while edge/shelter knowledge arrives only
+        via gateway delivery. Never calls ``sense()`` here. Never raises.
+        """
+        try:
+            for boat_id in sorted(self.world.boats):
+                boat = self.world.boats[boat_id]
+                agent = self.comms_agents.get(boat_id)
+                if not isinstance(agent, BoatAgent):
+                    fresh = BoatAgent(
+                        boat.boat_id,
+                        boat.capacity,
+                        float(boat.fuel),
+                        float(boat.fuel_reserve),
+                        float(getattr(boat, "speed", 1.0)),
+                        node_id=boat.node_id,
+                        status=boat.status,
+                        passengers=int(getattr(boat, "passengers", 0)),
+                    )
+                    if agent is not None:
+                        try:
+                            fresh.local_belief = getattr(
+                                agent, "local_belief", fresh.local_belief
+                            )
+                            fresh.world_tick_at_read = int(
+                                getattr(agent, "world_tick_at_read", 0) or 0
+                            )
+                        except Exception:
+                            pass
+                    self.comms_agents[boat_id] = fresh
+                else:
+                    try:
+                        agent.capacity = boat.capacity
+                        agent.fuel = float(boat.fuel)
+                        agent.fuel_reserve = float(boat.fuel_reserve)
+                        agent.speed = float(getattr(boat, "speed", 1.0))
+                        agent.node_id = boat.node_id
+                        agent.status = boat.status
+                        agent.passengers = int(
+                            getattr(boat, "passengers", 0)
+                        )
+                    except Exception:
+                        continue
+            for team_id in sorted(self.world.teams):
+                team = self.world.teams[team_id]
+                agent = self.comms_agents.get(team_id)
+                if not isinstance(agent, GroundTeamAgent):
+                    fresh = GroundTeamAgent(
+                        team.team_id,
+                        team.node_id,
+                        list(team.capabilities or []),
+                        status=team.status,
+                    )
+                    if agent is not None:
+                        try:
+                            fresh.local_belief = getattr(
+                                agent, "local_belief", fresh.local_belief
+                            )
+                            fresh.world_tick_at_read = int(
+                                getattr(agent, "world_tick_at_read", 0) or 0
+                            )
+                        except Exception:
+                            pass
+                    self.comms_agents[team_id] = fresh
+                else:
+                    try:
+                        agent.node_id = team.node_id
+                        agent.capabilities = list(team.capabilities or [])
+                        agent.status = team.status
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    def _comms_publish(self, tick: int) -> None:
+        """Publish one belief message per mirror agent via the gateway.
+
+        The snapshot is taken once per tick (``tick``/``version`` stamped)
+        and fanned out in sorted agent-id order with a per-message
+        sequence number. Comms failures never break the simulation.
+        """
+        try:
+            snapshot = world_to_belief_snapshot(self.world)
+            snapshot["tick"] = int(tick)
+            snapshot["version"] = int(tick)
+            for aid in sorted(self.comms_agents):
+                try:
+                    msg = make_belief_message(
+                        COORDINATOR_ID,
+                        aid,
+                        snapshot,
+                        int(tick),
+                        version=int(tick),
+                        seq=self._msg_seq,
+                        ttl=10,
+                    )
+                    self._msg_seq += 1
+                    self.gateway.send(msg, int(tick))
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _comms_deliver(self, tick: int) -> None:
+        """Pump due messages into mirror beliefs; track partition spans.
+
+        Groups gateway ``pump`` deliveries by recipient and feeds each
+        through the recipient's consumer ``Deduplicator`` into
+        ``deliver_to_agent``. Then records newly partitioned agents in
+        ``_partition_started`` and reconciles agents whose partition just
+        cleared. A partitioned agent receives zero deliveries, so its
+        ``world_tick_at_read`` stays frozen behind the global tick.
+        Never raises.
+        """
+        try:
+            deliveries = self.gateway.pump(int(tick))
+        except Exception:
+            deliveries = []
+        try:
+            grouped: dict[str, list[dict]] = {}
+            for delivery in deliveries or []:
+                if not isinstance(delivery, dict):
+                    continue
+                msg = delivery.get("message", {})
+                if not isinstance(msg, dict):
+                    continue
+                rid = str(msg.get("recipient_id", ""))
+                grouped.setdefault(rid, []).append(msg)
+            for rid in sorted(grouped):
+                agent = self.comms_agents.get(rid)
+                if agent is None:
+                    continue
+                try:
+                    dedup = self._consumer_dedup.setdefault(rid, Deduplicator())
+                except Exception:
+                    continue
+                for msg in grouped[rid]:
+                    try:
+                        deliver_to_agent(agent, msg, dedup, int(tick))
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        try:
+            for aid in sorted(self.comms_agents):
+                try:
+                    partitioned = not self.network.can_deliver(
+                        COORDINATOR_ID, aid, int(tick)
+                    )
+                except Exception:
+                    continue
+                if partitioned:
+                    if aid not in self._partition_started:
+                        self._partition_started[aid] = int(tick)
+                elif aid in self._partition_started:
+                    try:
+                        self._comms_reconcile_agent(aid, int(tick))
+                    except Exception:
+                        self._partition_started.pop(aid, None)
+        except Exception:
+            pass
+
+    def _comms_reconcile_agent(self, aid: str, tick: int) -> None:
+        """Reconcile one reconnected agent against authoritative state.
+
+        Builds the gateway ``report``/``authority`` pair, runs
+        ``gateway.reconcile``, sends any returned actions, surfaces stale
+        or conflicting ownership via ``flag_reconciliation`` + a
+        ``RECONCILED`` audit entry, and appends the outcome to
+        ``reconciliation_log``. Route pushes are log-only: the agent
+        holds position until re-ack (never force-moved). Never raises.
+        """
+        try:
+            agent = self.comms_agents.get(aid)
+            if agent is None:
+                return
+            report = build_agent_report(
+                agent, self._service.get(aid), self.assignments
+            )
+            authority = build_authority(
+                self.assignments,
+                self.manager.routes,
+                int(tick),
+                self._partition_started.get(aid),
+            )
+            outcome, actions, detail = self.gateway.reconcile(
+                report, authority, int(tick)
+            )
+            for action in actions or []:
+                try:
+                    if isinstance(action, dict):
+                        self.gateway.send(action, int(tick))
+                except Exception:
+                    continue
+            if not isinstance(detail, dict):
+                detail = {"detail": detail}
+            if outcome == "STALE_OWNERSHIP":
+                claimed = report.get("assignment_id")
+                if isinstance(claimed, str):
+                    try:
+                        flag_reconciliation(
+                            self.assignments,
+                            claimed,
+                            int(tick),
+                            "superseded while partitioned",
+                        )
+                    except Exception:
+                        pass
+                self.manager._log(
+                    int(tick),
+                    "RECONCILED",
+                    "engine",
+                    {
+                        "agent_id": aid,
+                        "outcome": outcome,
+                        "detail": detail,
+                    },
+                )
+            elif outcome == "STALE_ROUTE":
+                self.manager._log(
+                    int(tick),
+                    "RECONCILED",
+                    "engine",
+                    {
+                        "agent_id": aid,
+                        "outcome": outcome,
+                        "note": "route push issued; "
+                        "hold position until re-ack",
+                        "detail": detail,
+                    },
+                )
+            elif outcome == "CONFLICT":
+                self.manager._log(
+                    int(tick),
+                    "RECONCILED",
+                    "engine",
+                    {
+                        "agent_id": aid,
+                        "outcome": outcome,
+                        "detail": detail,
+                    },
+                )
+            else:  # IN_SYNC (or unknown code): quiet audit entry.
+                self.manager._log(
+                    int(tick),
+                    "RECONCILED",
+                    "engine",
+                    {"agent_id": aid, "outcome": outcome},
+                )
+            try:
+                self.reconciliation_log.append(
+                    {
+                        "tick": int(tick),
+                        "agent_id": aid,
+                        "outcome": outcome,
+                        "detail": copy.deepcopy(detail),
+                    }
+                )
+            except Exception:
+                self.reconciliation_log.append(
+                    {
+                        "tick": int(tick),
+                        "agent_id": aid,
+                        "outcome": outcome,
+                        "detail": {},
+                    }
+                )
+        except Exception:
+            pass
+        finally:
+            try:
+                self._partition_started.pop(aid, None)
+            except Exception:
+                pass
+
     # -- main loop ----------------------------------------------------
     def step(self) -> int:
         """Advance exactly one tick in the fixed order from the docstring."""
@@ -283,9 +909,25 @@ class Simulation:
                 self._handle_report_event(tick, event)
             else:
                 self.manager.apply_event(event, actor="scheduler")
+        # Phase 5 Step 05: beliefs flow only through the gateway. Mirrors
+        # refresh position/status, one belief message per agent is
+        # published, and only due (non-partitioned, non-delayed) messages
+        # update beliefs — all before detection/movement/dispatch. A
+        # partitioned agent gets zero deliveries, so its
+        # world_tick_at_read freezes behind the global tick. Wrapped so
+        # comms never breaks the simulation; on a reliable network every
+        # message delivers same-tick and behavior matches the baseline.
+        if self.enable_comms:
+            self._comms_ensure_agents()
+            self._comms_publish(tick)
+            self._comms_deliver(tick)
         self._detect_and_handle(tick)
         self._progress_services(tick)
         self.manager.advance_positions(tick, actor="engine")
+        if self.enable_comms:
+            # Belt-and-braces push (the patched _sync_agents inside
+            # propose() repeats this deterministically).
+            self._comms_sync_scheduler_beliefs(tick)
         self._dispatch(tick)
         self._link_pending_replans(tick)
         if self.snapshot_every > 0 and tick % self.snapshot_every == 0:
@@ -305,6 +947,46 @@ class Simulation:
             }
             snapshot["proposals_seen"] = copy.deepcopy(self.proposals_seen)
             snapshot["reports"] = self.manager.reports.to_dict()
+            # Comms state so a restore resumes deterministically.
+            try:
+                snapshot["gateway"] = self.gateway.to_dict()
+            except Exception:
+                snapshot["gateway"] = {}
+            try:
+                snapshot["network"] = self.network.to_dict()
+            except Exception:
+                snapshot["network"] = {}
+            try:
+                snapshot["comms_agents"] = {
+                    aid: {
+                        "kind": str(getattr(agent, "kind", "")),
+                        "local_belief": copy.deepcopy(agent.local_belief),
+                        "world_tick_at_read": int(
+                            getattr(agent, "world_tick_at_read", 0) or 0
+                        ),
+                    }
+                    for aid, agent in self.comms_agents.items()
+                }
+            except Exception:
+                snapshot["comms_agents"] = {}
+            try:
+                snapshot["consumer_dedup"] = {
+                    aid: dedup.to_dict()
+                    for aid, dedup in self._consumer_dedup.items()
+                }
+            except Exception:
+                snapshot["consumer_dedup"] = {}
+            try:
+                snapshot["partition_started"] = dict(self._partition_started)
+            except Exception:
+                snapshot["partition_started"] = {}
+            snapshot["msg_seq"] = self._msg_seq
+            try:
+                snapshot["reconciliation_log"] = copy.deepcopy(
+                    self.reconciliation_log
+                )
+            except Exception:
+                snapshot["reconciliation_log"] = []
             self.snapshots[tick] = snapshot
         return tick
 
