@@ -66,22 +66,22 @@ export default function MetricsPanel({ metrics, compareA, compareB, onCompareLoa
       : [];
 
   return (
-    <div className="rounded border border-slate-700 bg-slate-900 p-3">
-      <h2 className="mb-1 text-sm font-semibold">
-        Metrics <span className="text-xs font-normal text-slate-400">(strategy {metrics?.strategy ?? liveStrategy} · tick {metrics?.ticks ?? "—"} — API values; Phase 8 computes fairness/latency)</span>
-      </h2>
-      {!metrics && <p className="text-xs text-slate-400">No metrics yet.</p>}
+    <section className="list-card">
+      <div className="section-heading compact-heading">
+        <div><h2>Metrics <small>(strategy {metrics?.strategy ?? liveStrategy} · tick {metrics?.ticks ?? "—"} — API values; Phase 8 computes fairness/latency)</small></h2><p>Service, rejections and strategy compare</p></div>
+      </div>
+      {!metrics && <p className="empty-state">No metrics yet.</p>}
       {metrics && (
         <>
-          <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-            <div className="h-44">
-              <div className="text-xs text-slate-400">service: served / unmet / committed</div>
+          <div className="metrics-charts">
+            <div className="metrics-chart">
+              <div className="connection-note">service: served / unmet / committed</div>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={servedData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                  <XAxis dataKey="name" tick={{ fill: "#cbd5e1", fontSize: 11 }} />
-                  <YAxis allowDecimals={false} tick={{ fill: "#cbd5e1", fontSize: 11 }} />
-                  <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155" }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#dbe7e3" />
+                  <XAxis dataKey="name" tick={{ fill: "#5b7a70", fontSize: 11 }} />
+                  <YAxis allowDecimals={false} tick={{ fill: "#5b7a70", fontSize: 11 }} />
+                  <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #dbe7e3" }} />
                   <Bar dataKey="value">
                     {servedData.map((d) => (
                       <Cell key={d.name} fill={d.fill} />
@@ -90,46 +90,46 @@ export default function MetricsPanel({ metrics, compareA, compareB, onCompareLoa
                 </BarChart>
               </ResponsiveContainer>
             </div>
-            <div className="h-44">
-              <div className="text-xs text-slate-400">rejected by reason (violations proxy)</div>
+            <div className="metrics-chart">
+              <div className="connection-note">rejected by reason (violations proxy)</div>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={rejectedData} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                  <XAxis type="number" allowDecimals={false} tick={{ fill: "#cbd5e1", fontSize: 11 }} />
-                  <YAxis type="category" dataKey="reason" width={150} tick={{ fill: "#cbd5e1", fontSize: 10 }} />
-                  <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155" }} />
-                  <Bar dataKey="count" fill="#fbbf24" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#dbe7e3" />
+                  <XAxis type="number" allowDecimals={false} tick={{ fill: "#5b7a70", fontSize: 11 }} />
+                  <YAxis type="category" dataKey="reason" width={150} tick={{ fill: "#5b7a70", fontSize: 10 }} />
+                  <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #dbe7e3" }} />
+                  <Bar dataKey="count" fill="#e5ae4c" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           </div>
           {metrics.extra && Object.keys(metrics.extra).length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-300">
+            <div className="chip-row">
               {Object.entries(metrics.extra).map(([k, v]) => (
-                <span key={k} className="rounded bg-slate-800 px-2 py-0.5">{k}: {v}</span>
+                <span key={k} className="chip">{k}: {v}</span>
               ))}
             </div>
           )}
-          <div className="mt-1 text-xs text-slate-500">
+          <div className="connection-note">
             idle / violations / fairness gap / recovery / latency render here from API when present.
           </div>
         </>
       )}
-      <div className="mt-2 border-t border-slate-800 pt-2">
-        <h3 className="text-xs font-semibold">Strategy compare (centralized vs negotiation)</h3>
+      <div className="compare-block">
+        <h3 className="detail-h3">Strategy compare (centralized vs negotiation)</h3>
         <CompareForm onRun={loadCompare} loading={loading} />
-        {err && <p className="text-xs text-red-300">{err}</p>}
+        {err && <p className="demo-error">{err}</p>}
         {(compareA ?? compareB) && (
-          <div className="mt-1 grid grid-cols-2 gap-2 text-xs">
+          <div className="comms-grid">
             {[compareA, compareB].map((m, i) => (
-              <div key={i} className="rounded bg-slate-950 p-2">
-                <div className="font-semibold">{m?.strategy ?? "—"}</div>
-                <ul className="mt-1 space-y-0.5 text-slate-300">
+              <div key={i} className="detail-card">
+                <div><strong>{m?.strategy ?? "—"}</strong></div>
+                <ul className="detail-list">
                   {compareRows(m).map((r) => (
-                    <li key={r.k} className="flex justify-between"><span>{r.k}</span><span>{r.v}</span></li>
+                    <li key={r.k} className="compare-row"><span>{r.k}</span><span>{r.v}</span></li>
                   ))}
                   {m && Object.keys(m.rejected_by_reason).length > 0 && (
-                    <li className="text-slate-500">rejected: {Object.entries(m.rejected_by_reason).map(([k, v]) => `${k}=${v}`).join("; ").slice(0, 160)}</li>
+                    <li className="connection-note">rejected: {Object.entries(m.rejected_by_reason).map(([k, v]) => `${k}=${v}`).join("; ").slice(0, 160)}</li>
                   )}
                 </ul>
               </div>
@@ -137,7 +137,7 @@ export default function MetricsPanel({ metrics, compareA, compareB, onCompareLoa
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -145,17 +145,17 @@ function CompareForm({ onRun, loading }: { onRun: (a: string, b: string, simA: s
   const [simA, setSimA] = useState("");
   const [simB, setSimB] = useState("");
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
-      <input value={simA} onChange={(e) => setSimA(e.target.value)} placeholder="centralized sim id" className="w-40 rounded bg-slate-800 px-2 py-1" aria-label="Centralized sim id" />
-      <input value={simB} onChange={(e) => setSimB(e.target.value)} placeholder="negotiation sim id" className="w-40 rounded bg-slate-800 px-2 py-1" aria-label="Negotiation sim id" />
+    <div className="compare-form">
+      <input value={simA} onChange={(e) => setSimA(e.target.value)} placeholder="centralized sim id" className="compare-input" aria-label="Centralized sim id" />
+      <input value={simB} onChange={(e) => setSimB(e.target.value)} placeholder="negotiation sim id" className="compare-input" aria-label="Negotiation sim id" />
       <button
         disabled={loading || !simA || !simB}
         onClick={() => onRun("centralized", "negotiation", simA, simB)}
-        className="rounded bg-sky-700 px-2 py-1 hover:bg-sky-600 disabled:opacity-50"
+        className="button button-secondary"
       >
         {loading ? "Loading…" : "Compare side-by-side"}
       </button>
-      <span className="text-slate-500">Create one sim per strategy, paste ids, compare.</span>
+      <span className="connection-note">Create one sim per strategy, paste ids, compare.</span>
     </div>
   );
 }

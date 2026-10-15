@@ -114,6 +114,6 @@
   ],
   "events": [
     {"tick": 25, "kind": "INCIDENT_ARRIVAL", "payload": {"incident_id": "INC-13", "node_id": "N-14", "urgency": 4, "people": 2, "required_capabilities": ["ground"]}, "event_id": "EVT-001"},
-    {"tick": 40, "kind": "CLOSURE", "payload": {"edge_id": "R-11"}, "event_id": "EVT-002"}
+    {"tick": 12, "kind": "CLOSURE", "payload": {"edge_id": "W-04"}, "event_id": "EVT-002"}
   ]
 }

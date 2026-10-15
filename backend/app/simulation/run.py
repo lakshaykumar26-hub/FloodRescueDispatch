@@ -32,30 +32,94 @@ def load_scenario(path: str | Path) -> dict:
         return json.load(handle)
 
 
+def _as_list(value: object) -> list:
+    """Normalize a scenario collection to a list.
+
+    Runnable scenarios store ``nodes``/``edges``/... as lists, but the
+    routing fixture ``mini_graph.json`` stores ``nodes``/``edges`` as
+    dicts keyed by id (it is validated directly via
+    ``World.model_validate`` in ``test_routing``). Accept both so the
+    headless runner and the API return a clear empty world instead of
+    ``TypeError: string indices must be integers``.
+    """
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        return list(value.values())
+    if isinstance(value, list):
+        return value
+    raise ValueError(f"expected list or dict for scenario collection, got {type(value).__name__}")
+
+
+def _coerce_int(value: object, field: str) -> int:
+    """Coerce a scenario tick/seed field to int, raising ValueError on garbage.
+
+    ``create_entry`` maps only ``ValueError`` to 422 ``BAD_SCENARIO``;
+    a bare ``int(None)`` (``TypeError``) or missing dict key
+    (``KeyError``) would escape as a 500, so every coercion here goes
+    through this helper.
+    """
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"bad scenario field {field!r}: {value!r}") from exc
+
+
+def _scenario_seed(data: dict, seed: int | None) -> int:
+    """Resolve the run seed: explicit override, else ``random_seed`` (legacy ``seed`` fallback)."""
+    if seed is not None:
+        return _coerce_int(seed, "seed")
+    if "random_seed" in data:
+        return _coerce_int(data.get("random_seed"), "random_seed")
+    return _coerce_int(data.get("seed", 42), "seed")
+
+
+def _validated_items(value: object, collection: str, id_key: str) -> list[dict]:
+    """Normalize a scenario collection to a list of dicts with an id key.
+
+    Raises ``ValueError`` (not ``KeyError``/``TypeError``) when an entry
+    is not a dict or lacks its id key, so callers surface 422 instead
+    of 500.
+    """
+    items = _as_list(value)
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"bad scenario {collection}[{index}]: expected dict, "
+                f"got {type(item).__name__}"
+            )
+        if id_key not in item:
+            raise ValueError(
+                f"bad scenario {collection}[{index}]: missing {id_key!r}"
+            )
+    return items
+
+
 def build_world(data: dict, seed: int | None = None) -> World:
     """Build a :class:`World` from a scenario document.
 
     Nodes/edges/incidents/boats/teams/shelters are validated with the
     pydantic world models; ``seed`` defaults to the scenario's
-    ``random_seed``.
+    ``random_seed``. Collections accept either the runnable list form
+    or the ``mini_graph.json`` dict form.
     """
-    world_seed = seed if seed is not None else int(data.get("random_seed", 42))
-    nodes = {item["node_id"]: Node.model_validate(item) for item in data.get("nodes", [])}
-    edges = {item["edge_id"]: Edge.model_validate(item) for item in data.get("edges", [])}
+    world_seed = _scenario_seed(data, seed)
+    nodes = {item["node_id"]: Node.model_validate(item) for item in _validated_items(data.get("nodes", []), "nodes", "node_id")}
+    edges = {item["edge_id"]: Edge.model_validate(item) for item in _validated_items(data.get("edges", []), "edges", "edge_id")}
     incidents = {
         item["incident_id"]: Incident.model_validate(item)
-        for item in data.get("incidents", [])
+        for item in _validated_items(data.get("incidents", []), "incidents", "incident_id")
     }
     boats = {
-        item["boat_id"]: Boat.model_validate(item) for item in data.get("boats", [])
+        item["boat_id"]: Boat.model_validate(item) for item in _validated_items(data.get("boats", []), "boats", "boat_id")
     }
     teams = {
         item["team_id"]: GroundTeam.model_validate(item)
-        for item in data.get("teams", [])
+        for item in _validated_items(data.get("teams", []), "teams", "team_id")
     }
     shelters = {
         item["shelter_id"]: Shelter.model_validate(item)
-        for item in data.get("shelters", [])
+        for item in _validated_items(data.get("shelters", []), "shelters", "shelter_id")
     }
     return World(
         nodes=nodes,
@@ -64,7 +128,7 @@ def build_world(data: dict, seed: int | None = None) -> World:
         boats=boats,
         teams=teams,
         shelters=shelters,
-        tick=int(data.get("tick", 0)),
+        tick=_coerce_int(data.get("tick", 0), "tick"),
         seed=world_seed,
     )
 
@@ -75,8 +139,13 @@ def build_simulation(
 ) -> Simulation:
     """Build a :class:`Simulation` and preload the scenario's scheduler events."""
     world = build_world(data, seed=seed)
-    simulation_seed = seed if seed is not None else int(data.get("random_seed", 42))
-    weights = Weights(**data.get("weights", {}))
+    simulation_seed = _scenario_seed(data, seed)
+    raw_weights = data.get("weights", {})
+    if raw_weights is None:
+        raw_weights = {}
+    if not isinstance(raw_weights, dict):
+        raise ValueError(f"bad scenario field 'weights': {raw_weights!r}")
+    weights = Weights(**raw_weights)
     resolved = strategy if strategy is not None else str(data.get("strategy", "centralized"))
     if resolved == "centralized":
         scheduler = CentralizedScheduler(weights)
@@ -86,16 +155,36 @@ def build_simulation(
         raise ValueError(
             f"unknown strategy: {resolved!r} (expected 'centralized' or 'negotiation')"
         )
+    raw_network = data.get("network", {})
+    if raw_network is None:
+        raw_network = {}
+    if not isinstance(raw_network, dict):
+        raise ValueError(f"bad scenario field 'network': {raw_network!r}")
     simulation = Simulation(
         world, seed=simulation_seed, snapshot_every=snapshot_every,
         scheduler=scheduler,
-        network_config=dict(data.get("network", {}) or {}),
+        network_config=dict(raw_network),
     )
-    for event in data.get("events", []):
+    for index, event in enumerate(_as_list(data.get("events", []))):
+        if not isinstance(event, dict):
+            raise ValueError(
+                f"bad scenario events[{index}]: expected dict, "
+                f"got {type(event).__name__}"
+            )
+        for key in ("tick", "kind", "event_id"):
+            if key not in event:
+                raise ValueError(f"bad scenario events[{index}]: missing {key!r}")
+        payload = event.get("payload", {})
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise ValueError(
+                f"bad scenario events[{index}]: 'payload' must be a dict"
+            )
         simulation.manager.scheduler.push(
-            int(event["tick"]),
+            _coerce_int(event["tick"], f"events[{index}].tick"),
             str(event["kind"]),
-            dict(event.get("payload", {})),
+            dict(payload),
             str(event["event_id"]),
         )
     return simulation
@@ -115,7 +204,8 @@ def summarize(simulation: Simulation) -> dict:
     for entry in simulation.manager.event_log:
         if entry["kind"] != "REJECTED":
             continue
-        reason = entry["detail"].get("reason", "")
+        detail = entry.get("detail")
+        reason = detail.get("reason", "") if isinstance(detail, dict) else ""
         rejected_by_reason[reason] = rejected_by_reason.get(reason, 0) + 1
     return {
         "ticks": simulation.tick,
@@ -142,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     data = load_scenario(args.scenario)
-    max_ticks = args.ticks if args.ticks is not None else int(data.get("ticks", 120))
+    max_ticks = args.ticks if args.ticks is not None else _coerce_int(data.get("ticks", 120), "ticks")
     strategy = args.strategy if args.strategy is not None else str(data.get("strategy", "centralized"))
     simulation = build_simulation(data, seed=args.seed, strategy=strategy)
     simulation.run(max_ticks)

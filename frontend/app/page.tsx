@@ -1,10 +1,17 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import CommunicationsPanel from "../components/communications-panel";
+import ExplanationPanel from "../components/explanation-panel";
+import IncidentPanel from "../components/incident-panel";
+import MetricsPanel from "../components/metrics-panel";
 import SyntheticMap from "../components/synthetic-map";
+import TimelinePanel from "../components/timeline-panel";
 import { useSimulation } from "../hooks/useSimulation";
+import { DEFAULT_SCENARIO, SCENARIOS } from "../lib/scenarios";
+import type { SimEvent, SimulationMetrics } from "../types";
 
-const ACTIVE = new Set(["OPEN", "ASSIGNED", "IN_PROGRESS", "UNRESOLVED"]);
+const ACTIVE_ASSIGNMENT = new Set(["COMMITTED", "ACKNOWLEDGED", "IN_PROGRESS"]);
 
 function prettyStatus(status: string) {
   return status.toLowerCase().replaceAll("_", " ").replace(/^./, (c) => c.toUpperCase());
@@ -13,12 +20,13 @@ function prettyStatus(status: string) {
 export default function DashboardPage() {
   const sim = useSimulation();
   const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
+  const [selectedAssignment, setSelectedAssignment] = useState<string | null>(null);
+  const [scrubTick, setScrubTick] = useState<number | null>(null);
+  const [compareA, setCompareA] = useState<SimulationMetrics | null>(null);
+  const [compareB, setCompareB] = useState<SimulationMetrics | null>(null);
+  const [scenario, setScenario] = useState(DEFAULT_SCENARIO);
   const [eventBusy, setEventBusy] = useState(false);
   const [eventNotice, setEventNotice] = useState("");
-  const activeRequests = useMemo(
-    () => sim.world.incidents.filter((incident) => ACTIVE.has(incident.status)).sort((a, b) => b.urgency - a.urgency),
-    [sim.world.incidents],
-  );
   const openWaterways = sim.world.edges.filter((edge) => edge.mode === "water" && edge.status === "open");
   const closedWaterways = sim.world.edges.filter((edge) => edge.mode === "water" && edge.status === "closed");
   const riskiestWaterway = [...sim.world.edges].filter((edge) => edge.mode === "water" && edge.risk_level < 1).sort((a, b) => b.risk_level - a.risk_level || a.edge_id.localeCompare(b.edge_id))[0];
@@ -32,6 +40,36 @@ export default function DashboardPage() {
   while (usedIncidentIds.has(`INC-TEST-${String(nextIncidentNumber).padStart(2, "0")}`)) nextIncidentNumber += 1;
   const nextIncidentId = `INC-TEST-${String(nextIncidentNumber).padStart(2, "0")}`;
   const started = sim.status !== "created" && sim.status !== "idle";
+  const activeScenario = SCENARIOS.find((s) => s.name === scenario) ?? SCENARIOS[0];
+
+  // Active assignment routes are drawn on the map so rescuers visibly
+  // travel along a path instead of drifting between bare nodes.
+  const activeAssignments = useMemo(
+    () => sim.assignments.filter((a) => ACTIVE_ASSIGNMENT.has(a.status)),
+    [sim.assignments],
+  );
+  const activeRouteEdgeIds = useMemo(
+    () => activeAssignments.flatMap((a) => a.route_edge_ids ?? []),
+    [activeAssignments],
+  );
+  const selectedRouteEdgeIds = useMemo(() => {
+    const direct = sim.assignments.find((a) => a.assignment_id === selectedAssignment)?.route_edge_ids;
+    if (direct?.length) return direct;
+    if (selectedIncident) {
+      return sim.assignments.find((a) => a.incident_id === selectedIncident && ACTIVE_ASSIGNMENT.has(a.status))?.route_edge_ids ?? [];
+    }
+    return [];
+  }, [sim.assignments, selectedAssignment, selectedIncident]);
+
+  const pickTimelineEvent = (event: SimEvent) => {
+    const assignmentId = event.detail?.assignment_id;
+    setSelectedAssignment(typeof assignmentId === "string" ? assignmentId : null);
+  };
+
+  const selectResource = (resourceId: string) => {
+    const assignment = activeAssignments.find((a) => a.resource_id === resourceId) ?? null;
+    setSelectedAssignment(assignment ? assignment.assignment_id : null);
+  };
 
   const fireEvent = async (label: string, kind: string, payload: Record<string, unknown>) => {
     if (!sim.simulationId || eventBusy) return;
@@ -58,30 +96,35 @@ export default function DashboardPage() {
       <header className="demo-header">
         <div>
           <p className="eyebrow">Flood response · live demo</p>
-          <h1>Rescue operations</h1>
+          <h1>Flood Rescue Dispatch — Command Dashboard</h1>
           <p className="subheading">Requests, boats, shelters, and changing road conditions in one view.</p>
         </div>
-        <div className="run-summary" aria-live="polite">
-          <span className={`status-dot ${sim.status === "running" ? "is-running" : ""}`} />
-          <span>{prettyStatus(sim.status)}</span><span className="summary-divider" /><span>Step {sim.tick}</span>
-        </div>
       </header>
+      {sim.status === "running" && (
+        <div className="tick-progress" style={{ animationDuration: `${sim.pollIntervalMs}ms` }} role="progressbar" aria-label="Next tick progress" />
+      )}
 
       {sim.error && <div className="demo-error" role="alert">{sim.error}</div>}
 
       <section className="action-card" aria-label="Simulation controls">
         <div className="action-copy">
-          <strong>{sim.simulationId ? "Single boat test" : "Start a single boat test"}</strong>
-          <span>{sim.simulationId ? "Follow Boat 01 as it responds and delivers people to shelters." : "One boat, several rescue requests, and shelter drop-offs."}</span>
+          <strong>{sim.simulationId ? `Scenario: ${activeScenario.label}` : "Start a scenario"}</strong>
+          <span>{activeScenario.blurb}</span>
         </div>
         <div className="action-buttons">
+          <label className="scenario-picker">
+            <span className="scenario-picker-label">Scenario</span>
+            <select aria-label="Scenario" value={scenario} onChange={(e) => setScenario(e.target.value)}>
+              {SCENARIOS.map((s) => <option key={s.name} value={s.name}>{s.label}</option>)}
+            </select>
+          </label>
           {!sim.simulationId ? (
-            <button className="button button-primary" disabled={sim.loading} onClick={() => void sim.create("centralized", "single_boat_test").then(() => sim.start())}>{sim.loading ? "Starting…" : "Start one-boat test"}</button>
+            <button className="button button-primary" disabled={sim.loading} onClick={() => void sim.create("centralized", scenario).then(() => sim.start())}>{sim.loading ? "Starting…" : `Start ${activeScenario.label}`}</button>
           ) : <>
             <button className="button button-primary" disabled={sim.loading || sim.status === "running"} onClick={() => void sim.start()}>Play</button>
             <button className="button button-secondary" disabled={sim.loading || !started || sim.status !== "running"} onClick={() => void sim.pause()}>Pause</button>
             <button className="button button-secondary" disabled={sim.loading || !started} onClick={() => void sim.step(1)}>Step</button>
-            <button className="button button-secondary" disabled={sim.loading} onClick={() => void sim.create("centralized", "single_boat_test").then(() => sim.start())}>Reset one-boat test</button>
+            <button className="button button-secondary" disabled={sim.loading} onClick={() => void sim.create("centralized", scenario).then(() => sim.start())}>Reset {activeScenario.label}</button>
           </>}
         </div>
       </section>
@@ -104,25 +147,25 @@ export default function DashboardPage() {
               {closedWaterways.length > 0 && <button disabled={!sim.simulationId || eventBusy} onClick={() => void fireEvent(`Reopened ${closedWaterways[0].edge_id}`, "EDGE_REOPEN", { edge_id: closedWaterways[0].edge_id })}>{`Reopen ${closedWaterways[0].edge_id}`}</button>}
             </div>
             {eventNotice && <p className="event-notice" role="status">{eventNotice}</p>}
-            {!sim.simulationId && <p className="connection-note">Start the one-boat test to enable events.</p>}
+            {!sim.simulationId && <p className="connection-note">Start a scenario to enable events.</p>}
           </section>
-          <SyntheticMap world={sim.world} events={sim.events} tick={sim.tick} motionDurationMs={Math.round(sim.pollIntervalMs * 0.85)} selectedIncidentId={selectedIncident} onSelectIncident={setSelectedIncident} />
+          <SyntheticMap
+            world={sim.world}
+            events={sim.events}
+            tick={sim.tick}
+            motionDurationMs={Math.round(sim.pollIntervalMs * 0.85)}
+            selectedIncidentId={selectedIncident}
+            selectedResourceId={null}
+            disconnectedIds={sim.comms?.disconnected ?? []}
+            selectedRouteEdgeIds={selectedRouteEdgeIds}
+            changedRouteEdgeIds={activeRouteEdgeIds}
+            onSelectIncident={setSelectedIncident}
+            onSelectResource={selectResource}
+          />
         </div>
 
         <aside className="side-column">
-          <section className="list-card">
-            <div className="section-heading compact-heading"><div><h2>Rescue requests</h2><p>{activeRequests.length} active</p></div></div>
-            <ul className="request-list">
-              {activeRequests.slice(0, 6).map((request) => <li key={request.incident_id}>
-                <button className={`request-row ${selectedIncident === request.incident_id ? "is-selected" : ""}`} onClick={() => setSelectedIncident(selectedIncident === request.incident_id ? null : request.incident_id)}>
-                  <span className={`urgency-mark urgency-${request.urgency}`} />
-                  <span className="row-main"><strong>{request.incident_id}</strong><small>{request.people} people{" · "}{sim.world.nodes.find((node) => node.node_id === request.node_id)?.neighborhood ?? request.node_id}</small></span>
-                  <span className={`request-status status-${request.status.toLowerCase()}`}>{prettyStatus(request.status)}</span>
-                </button>
-              </li>)}
-              {activeRequests.length === 0 && <li className="empty-state">No active requests</li>}
-            </ul>
-          </section>
+          <IncidentPanel incidents={sim.world.incidents} selectedId={selectedIncident} onSelect={setSelectedIncident} tick={sim.tick} />
 
           <section className="list-card boats-card">
             <div className="section-heading compact-heading"><div><h2>Boats</h2><p>Current location and assigned destination</p></div><span className="count-pill">{sim.world.boats.length}</span></div>
@@ -155,7 +198,32 @@ export default function DashboardPage() {
 
 
 
-      <footer className="demo-footer">Presentation demo · synthetic data only</footer>
+      <section className="panel-grid" aria-label="Detail panels">
+        <TimelinePanel
+          events={sim.events}
+          tick={sim.tick}
+          maxTick={Math.max(sim.tick, ...sim.snapshots, 60)}
+          scrubTick={scrubTick}
+          onScrub={setScrubTick}
+          onPickEvent={pickTimelineEvent}
+        />
+        <ExplanationPanel
+          assignments={sim.assignments}
+          events={sim.events}
+          selectedId={selectedAssignment}
+          onSelect={setSelectedAssignment}
+        />
+        <CommunicationsPanel comms={sim.comms} />
+        <MetricsPanel
+          metrics={sim.metrics}
+          compareA={compareA}
+          compareB={compareB}
+          onCompareLoaded={(a, b) => { setCompareA(a); setCompareB(b); }}
+          liveStrategy={sim.strategy}
+        />
+      </section>
+
+      <footer className="demo-footer">Deterministic ticks only · synthetic data · lifecycle PROPOSED→COMMITTED→ACKNOWLEDGED→IN_PROGRESS→COMPLETED</footer>
     </main>
   );
 }

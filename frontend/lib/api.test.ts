@@ -243,9 +243,11 @@ describe("REST calls (mocked fetch)", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ simulation_id: "SIM-001", tick: 6, status: "running" }));
     const r = await stepSimulation("SIM-001", 1);
     expect(r.tick).toBe(6);
-    fetchMock.mockResolvedValueOnce(jsonResponse({ event_id: "EVT-1", tick: 6 }));
+    fetchMock.mockResolvedValueOnce(jsonResponse({ event_id: "EVT-1", tick: 6, kind: "CLOSURE", scheduled_tick: 7 }));
     const inj = await injectEvent("SIM-001", { kind: "CLOSURE", payload: { edge_id: "R-11" } });
-    expect(inj).toEqual({ event_id: "EVT-1", tick: 6 });
+    // Backend contract (store.inject_event) returns scheduled_tick alongside
+    // tick; useSimulation.inject consumes it for the "applies on step" notice.
+    expect(inj).toEqual({ event_id: "EVT-1", tick: 6, scheduled_tick: 7 });
   });
 
   it("getEvents/getAssignments/getMetrics/getCommunications/replay pass through normalizers", async () => {

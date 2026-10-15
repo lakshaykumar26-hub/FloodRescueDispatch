@@ -126,4 +126,25 @@ describe("TimelinePanel", () => {
     fireEvent.change(screen.getByLabelText("Scrub ticks"), { target: { value: "60" } });
     expect(onScrub).toHaveBeenCalledWith(null);
   });
+
+  it("paginates long event lists, opening on the latest page", () => {
+    const events = Array.from({ length: 25 }, (_, i) => ({
+      tick: i + 1,
+      kind: "MOVE",
+      actor: "engine",
+      detail: { resource_id: "BOAT-01", seq: i + 1 },
+    }));
+    render(
+      <TimelinePanel events={events} tick={25} maxTick={25} scrubTick={null} onScrub={vi.fn()} onPickEvent={vi.fn()} />,
+    );
+    expect(screen.getByText("Page 3 of 3")).toBeInTheDocument();
+    expect(screen.getByText("t25")).toBeInTheDocument();
+    expect(screen.queryByText("t1")).toBeNull();
+    fireEvent.click(screen.getByText("‹ Prev"));
+    expect(screen.getByText("Page 2 of 3")).toBeInTheDocument();
+    expect(screen.queryByText("t25")).toBeNull();
+    fireEvent.click(screen.getByText("Latest"));
+    expect(screen.getByText("Page 3 of 3")).toBeInTheDocument();
+    expect(screen.getByText("t25")).toBeInTheDocument();
+  });
 });

@@ -69,68 +69,70 @@ export default function ExplanationPanel({ assignments, events, selectedId, onSe
   }, [sel]);
 
   return (
-    <div className="rounded border border-slate-700 bg-slate-900 p-3">
-      <h2 className="mb-2 text-sm font-semibold">Decision explanation</h2>
+    <section className="list-card">
+      <div className="section-heading compact-heading">
+        <div><h2>Decision explanation</h2><p>Why this assignment won, what was rejected</p></div>
+      </div>
       {assignments.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-1">
+        <div className="chip-row">
           {assignments.slice(0, 12).map((a) => (
             <button
               key={a.assignment_id}
               onClick={() => onSelect(a.assignment_id === selectedId ? null : a.assignment_id)}
-              className={`rounded px-2 py-0.5 text-xs ${a.assignment_id === selectedId ? "bg-emerald-600 text-white" : "bg-slate-800 hover:bg-slate-700"}`}
+              className={`chip ${a.assignment_id === selectedId ? "chip-selected" : ""}`}
             >
               {a.assignment_id} · {a.status}
             </button>
           ))}
         </div>
       )}
-      {!sel && <p className="text-xs text-slate-400">Select an assignment (or incident/resource on the map) to see why it was chosen, what was rejected, and which safety checks applied.</p>}
+      {!sel && <p className="connection-note">Select an assignment (or incident/resource on the map) to see why it was chosen, what was rejected, and which safety checks applied.</p>}
       {sel && (
-        <div className="space-y-2 text-xs">
-          <div className="rounded bg-slate-800 p-2">
+        <div className="detail-stack">
+          <div className="detail-card">
             <strong>Selected: {sel.resource_id} → {sel.incident_id}</strong>
-            <div className="text-slate-300">
+            <div className="connection-note">
               cost {sel.cost.toFixed(2)} · seats {sel.seats} · shelter {sel.shelter_id ?? "—"} · route {(sel.route_edge_ids ?? []).join(" → ") || "—"} · v{sel.version} · created tick {sel.created_tick}
             </div>
           </div>
           <div>
-            <h3 className="font-semibold text-slate-200">Lifecycle</h3>
-            <ul className="mt-0.5 space-y-0.5 text-slate-300">
+            <h3 className="detail-h3">Lifecycle</h3>
+            <ul className="detail-list">
               {sel.history.map((h, i) => (
-                <li key={i}>tick {h.tick}: {h.from ?? "?"} → {h.to ?? "?"} — {h.reason} <span className="text-slate-500">({h.actor})</span></li>
+                <li key={i}>tick {h.tick}: {h.from ?? "?"} → {h.to ?? "?"} — {h.reason} <span>({h.actor})</span></li>
               ))}
-              {sel.history.length === 0 && <li className="text-slate-500">No history recorded.</li>}
+              {sel.history.length === 0 && <li className="empty-state">No history recorded.</li>}
             </ul>
           </div>
           <div>
-            <h3 className="font-semibold text-slate-200">Alternatives for {sel.incident_id}</h3>
-            {alternatives.length === 0 && <p className="text-slate-500">No competing assignments recorded for this incident.</p>}
-            <ul className="mt-0.5 space-y-0.5 text-slate-300">
+            <h3 className="detail-h3">Alternatives for {sel.incident_id}</h3>
+            {alternatives.length === 0 && <p className="connection-note">No competing assignments recorded for this incident.</p>}
+            <ul className="detail-list">
               {alternatives.map((a) => (
                 <li key={a.assignment_id}>{a.resource_id} · cost {a.cost.toFixed(2)} · route {(a.route_edge_ids ?? []).join("→")} · {a.status}</li>
               ))}
             </ul>
           </div>
           <div>
-            <h3 className="font-semibold text-slate-200">Rejection reasons & safety checks</h3>
-            {rejectionReasons.length === 0 && <p className="text-slate-500">None cited on this assignment (safety validator passed: closed edge, capacity, fuel reserve, shelter overflow all checked at commit).</p>}
-            <ul className="mt-0.5 space-y-0.5 text-slate-300">
+            <h3 className="detail-h3">Rejection reasons & safety checks</h3>
+            {rejectionReasons.length === 0 && <p className="connection-note">None cited on this assignment (safety validator passed: closed edge, capacity, fuel reserve, shelter overflow all checked at commit).</p>}
+            <ul className="detail-list">
               {rejectionReasons.map((r, i) => <li key={i}>{r}</li>)}
             </ul>
           </div>
           {replanChain.length > 0 && (
             <div>
-              <h3 className="font-semibold text-slate-200">Replan chain</h3>
-              <ul className="mt-0.5 space-y-0.5 text-slate-300">
+              <h3 className="detail-h3">Replan chain</h3>
+              <ul className="detail-list">
                 {replanChain.map((r, i) => <li key={i}>{r}</li>)}
               </ul>
             </div>
           )}
-          {staleNote && <p className="rounded bg-amber-900/40 p-1.5 text-amber-200">⚠ {staleNote}</p>}
+          {staleNote && <p className="event-notice">⚠ {staleNote}</p>}
           {related.length > 0 && (
             <details>
-              <summary className="cursor-pointer text-slate-400">Related events ({related.length})</summary>
-              <ul className="mt-1 space-y-0.5 text-slate-400">
+              <summary className="detail-summary">Related events ({related.length})</summary>
+              <ul className="detail-list">
                 {related.map((e, i) => (
                   <li key={i}>t{e.tick} {e.kind} [{e.actor}] {JSON.stringify(e.detail).slice(0, 140)}</li>
                 ))}
@@ -139,6 +141,6 @@ export default function ExplanationPanel({ assignments, events, selectedId, onSe
           )}
         </div>
       )}
-    </div>
+    </section>
   );
 }

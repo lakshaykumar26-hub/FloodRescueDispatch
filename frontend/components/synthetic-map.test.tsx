@@ -16,7 +16,7 @@ describe("SyntheticMap", () => {
     const svg = container.querySelector("svg");
     expect(svg).not.toBeNull();
     expect(svg?.getAttribute("aria-label")).toMatch(/no tiles/i);
-    expect(screen.getByText(/disputed ⚠/)).toBeInTheDocument();
+    expect(screen.queryByText(/disputed ⚠/)).toBeNull();
     expect(screen.getByText(/nodes · .* edges/)).toBeInTheDocument();
   });
 

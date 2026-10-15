@@ -25,7 +25,7 @@
                       "edge_id":  "W-02",
                       "from_node":  "N-02",
                       "mode":  "water",
-                      "risk_level":  0.2,
+                      "risk_level":  0.3,
                       "status":  "open",
                       "to_node":  "N-03",
                       "travel_time":  2

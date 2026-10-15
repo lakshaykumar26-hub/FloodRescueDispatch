@@ -54,12 +54,12 @@ beforeEach(() => {
 });
 
 describe("DashboardPage", () => {
-  it("renders the command header with tick/status/backend badges", () => {
-    render(<DashboardPage />);
+  it("renders the command header without a status pill", () => {
+    const { container } = render(<DashboardPage />);
     expect(screen.getByText("Flood Rescue Dispatch — Command Dashboard")).toBeInTheDocument();
-    expect(screen.getByText("60", { selector: ".tick-pop" })).toBeInTheDocument();
-    expect(screen.getByText(/status: running/)).toBeInTheDocument();
-    expect(screen.getByText(/backend unreachable — DEMO data/)).toBeInTheDocument();
+    expect(container.querySelector(".run-summary")).toBeNull();
+    expect(screen.queryByText(/status: running/)).toBeNull();
+    expect(screen.queryByText(/backend live/)).toBeNull();
   });
 
   it("shows the offline SVG map and all side panels", () => {
@@ -68,21 +68,6 @@ describe("DashboardPage", () => {
     for (const heading of ["Incidents \\(3\\)", "Decision explanation", "Comms monitor", "Timeline", "Metrics"]) {
       expect(screen.getByText(new RegExp(heading))).toBeInTheDocument();
     }
-  });
-
-  it("shows a live-preview badge when reachable but no sim exists yet", () => {
-    sim.backendReachable = true;
-    sim.simulationId = null;
-    render(<DashboardPage />);
-    expect(screen.getByText(/backend live · DEMO preview \(create a sim\)/)).toBeInTheDocument();
-  });
-
-  it("shows WS status once a live sim exists", () => {
-    sim.backendReachable = true;
-    sim.simulationId = "SIM-001";
-    sim.wsConnected = false;
-    render(<DashboardPage />);
-    expect(screen.getByText(/backend live · WS ✕/)).toBeInTheDocument();
   });
 
   it("clicking a timeline event syncs the explanation panel selection", () => {
@@ -104,7 +89,6 @@ describe("DashboardPage", () => {
     const bar = container.querySelector(".tick-progress") as HTMLElement;
     expect(bar).not.toBeNull();
     expect(bar.style.animationDuration).toBe("2000ms");
-    expect(screen.getByText("60", { selector: ".tick-pop" })).toBeInTheDocument();
   });
 
   it("hides the progress bar when not running", () => {

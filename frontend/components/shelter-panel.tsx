@@ -4,35 +4,30 @@ import type { Shelter } from "../types";
 
 export default function ShelterPanel({ shelters }: { shelters: Shelter[] }) {
   return (
-    <div className="rounded border border-slate-700 bg-slate-900 p-3">
-      <h2 className="mb-2 text-sm font-semibold">Shelters ({shelters.length})</h2>
-      <ul className="space-y-1 text-xs">
+    <section className="list-card">
+      <div className="section-heading compact-heading">
+        <div><h2>Shelters ({shelters.length})</h2><p>People housed / total spaces</p></div>
+      </div>
+      <ul className="shelter-list">
         {shelters.map((s) => {
           const reserved = Object.values(s.reservations).reduce((a, b) => a + b, 0);
           const remaining = s.capacity - s.occupancy - reserved;
+          const pct = Math.min(100, Math.max(0, ((s.occupancy + reserved) / Math.max(1, s.capacity)) * 100));
           return (
-            <li key={s.shelter_id} className="rounded bg-slate-950 px-2 py-1">
-              <div className="flex items-center justify-between">
-                <strong>🏠 {s.shelter_id}</strong>
-                <span className={s.accepting ? "text-emerald-300" : "text-red-300"}>
-                  {s.accepting ? `open · ${remaining} left` : "FULL"}
-                </span>
-              </div>
-              <div className="text-slate-400">
-                @{s.node_id} · occ {s.occupancy}/{s.capacity} · reserved {reserved}
-                {Object.keys(s.reservations).length > 0 && ` (${Object.keys(s.reservations).join(", ")})`}
-              </div>
-              <div className="mt-1 h-1.5 rounded bg-slate-800">
-                <div
-                  className={`h-1.5 rounded ${remaining <= 0 ? "bg-red-500" : "bg-emerald-500"}`}
-                  style={{ width: `${Math.min(100, Math.max(0, ((s.occupancy + reserved) / Math.max(1, s.capacity)) * 100))}%` }}
-                />
-              </div>
+            <li key={s.shelter_id}>
+              <span className="shelter-icon">+</span>
+              <span className="row-main">
+                <strong>{s.shelter_id}</strong>
+                <small>@{s.node_id} · occ {s.occupancy}/{s.capacity} · reserved {reserved}{Object.keys(s.reservations).length > 0 && ` (${Object.keys(s.reservations).join(", ")})`}</small>
+                <span className="capacity-track"><i style={{ width: `${pct}%` }} /></span>
+                <small>{s.accepting ? `open · ${remaining} left` : "FULL"}</small>
+              </span>
+              <span className="capacity-label"><strong>{s.occupancy}</strong><span> / {s.capacity}<br />occupied</span></span>
             </li>
           );
         })}
-        {shelters.length === 0 && <li className="text-slate-400">No shelters.</li>}
+        {shelters.length === 0 && <li className="empty-state">No shelters.</li>}
       </ul>
-    </div>
+    </section>
   );
 }
