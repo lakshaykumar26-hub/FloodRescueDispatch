@@ -149,13 +149,31 @@ export function useSimulation(): UseSimulation {
     return unsub;
   }, [simulationId]);
 
-  // Polling fallback while running (WS may lag or be absent).
+  // Auto-advance while running: Play means "run continuously". The engine
+  // only moves when POST .../step is called (WS pushes on explicit actions
+  // only), so each poll interval steps exactly one tick and then refreshes
+  // the panels. Pause halts the loop; Step +1 is the manual one-tick path.
   useEffect(() => {
     if (!simulationId || !backendReachable) return;
     if (statusRef.current !== "running") return;
     const interval = POLL_BY_SPEED[speed] ?? 2000;
+    let inFlight = false; // never overlap two step+refresh cycles
     const t = window.setInterval(() => {
-      void refresh();
+      const id = simIdRef.current;
+      if (!id || inFlight) return;
+      inFlight = true;
+      void (async () => {
+        try {
+          const r = await stepSimulation(id, 1);
+          setTick(r.tick);
+          setStatus(r.status);
+          await refresh();
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "auto-step failed");
+        } finally {
+          inFlight = false;
+        }
+      })();
     }, interval);
     return () => window.clearInterval(t);
   }, [simulationId, backendReachable, speed, status, refresh]);

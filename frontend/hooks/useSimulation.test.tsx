@@ -149,4 +149,57 @@ describe("useSimulation", () => {
     });
     expect(api.subscribeSimulation).toHaveBeenCalledWith("SIM-009", expect.any(Function), expect.any(Function));
   });
+
+  it("auto-steps one tick per interval while running (Play = run continuously)", async () => {
+    vi.useFakeTimers();
+    try {
+      api.createSimulation.mockResolvedValueOnce({ simulation_id: "SIM-010", tick: 0, status: "created", strategy: "centralized", seed: 42 });
+      api.stepSimulation.mockResolvedValue({ simulation_id: "SIM-010", tick: 6, status: "running" });
+      const { result } = renderHook(() => useSimulation());
+      await act(async () => {
+        await result.current.create("centralized", "baseline");
+      });
+      // create+refresh reports status running (liveState) → loop is active.
+      expect(result.current.status).toBe("running");
+      expect(api.stepSimulation).not.toHaveBeenCalled();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(api.stepSimulation).toHaveBeenCalledTimes(1);
+      expect(api.stepSimulation).toHaveBeenCalledWith("SIM-010", 1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(api.stepSimulation).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops auto-stepping once paused", async () => {
+    vi.useFakeTimers();
+    try {
+      api.createSimulation.mockResolvedValueOnce({ simulation_id: "SIM-011", tick: 0, status: "created", strategy: "centralized", seed: 42 });
+      api.pauseSimulation.mockResolvedValueOnce({ simulation_id: "SIM-011", tick: 6, status: "paused" });
+      const { result } = renderHook(() => useSimulation());
+      await act(async () => {
+        await result.current.create("centralized", "baseline");
+      });
+      await act(async () => {
+        await result.current.pause();
+      });
+      // refresh() after pause re-reads state; hold it at paused.
+      api.getState.mockResolvedValue({ ...liveState, tick: 6, status: "paused" });
+      await act(async () => {
+        await result.current.refresh();
+      });
+      vi.clearAllMocks();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000);
+      });
+      expect(api.stepSimulation).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
