@@ -1,0 +1,103 @@
+{
+  "edges": {
+    "R-AB": {
+      "capacity": 2,
+      "edge_id": "R-AB",
+      "from_node": "A",
+      "last_updated_tick": 0,
+      "mode": "road",
+      "risk_level": 0.1,
+      "status": "open",
+      "to_node": "B",
+      "travel_time": 5
+    },
+    "R-AC": {
+      "capacity": 2,
+      "edge_id": "R-AC",
+      "from_node": "A",
+      "last_updated_tick": 0,
+      "mode": "road",
+      "risk_level": 0.1,
+      "status": "open",
+      "to_node": "C",
+      "travel_time": 12
+    },
+    "R-BC": {
+      "capacity": 2,
+      "edge_id": "R-BC",
+      "from_node": "B",
+      "last_updated_tick": 0,
+      "mode": "road",
+      "risk_level": 0.2,
+      "status": "open",
+      "to_node": "C",
+      "travel_time": 5
+    },
+    "W-AD": {
+      "capacity": 1,
+      "edge_id": "W-AD",
+      "from_node": "A",
+      "last_updated_tick": 0,
+      "mode": "water",
+      "risk_level": 0.3,
+      "status": "open",
+      "to_node": "D",
+      "travel_time": 4
+    },
+    "W-BC": {
+      "capacity": 1,
+      "edge_id": "W-BC",
+      "from_node": "B",
+      "last_updated_tick": 0,
+      "mode": "water",
+      "risk_level": 0.6,
+      "status": "disputed",
+      "to_node": "C",
+      "travel_time": 6
+    },
+    "W-DC": {
+      "capacity": 1,
+      "edge_id": "W-DC",
+      "from_node": "D",
+      "last_updated_tick": 0,
+      "mode": "water",
+      "risk_level": 0.3,
+      "status": "open",
+      "to_node": "C",
+      "travel_time": 4
+    }
+  },
+  "nodes": {
+    "A": {
+      "kind": "station",
+      "neighborhood": "North",
+      "node_id": "A",
+      "x": 0.0,
+      "y": 0.0
+    },
+    "B": {
+      "kind": "intersection",
+      "neighborhood": "North",
+      "node_id": "B",
+      "x": 1.0,
+      "y": 0.0
+    },
+    "C": {
+      "kind": "incident_site",
+      "neighborhood": "East",
+      "node_id": "C",
+      "x": 2.0,
+      "y": 0.0
+    },
+    "D": {
+      "kind": "transfer",
+      "neighborhood": "South",
+      "node_id": "D",
+      "x": 1.0,
+      "y": 1.0
+    }
+  },
+  "random_seed": 42,
+  "seed": 42,
+  "tick": 0
+}

@@ -25,3 +25,9 @@ Spec §§7.4, 10 (exclusive assignment, shelter capacity, validity).
 - [ ] `cancel()` frees boat and releases shelter seats (assert counts before/after).
 - [ ] Double-`commit` same proposal → single `assignment_id`, version unchanged.
 - [ ] Manual: contention fixture log shows winner + loser reason.
+
+## Decision notes (as built, Phase 2)
+
+- Conflict reason format is `RESOURCE_CONFLICT:WINNER=<proposal_id>` (not `WINNER=ASN-..`): `resolve()` is pure and runs before commit, so no assignment IDs exist yet — they are minted at commit time. Winner traceability is preserved via `proposal_id`, which every `COMMITTED` log entry carries alongside `assignment_id`.
+- `cancel()` end state is `AVAILABLE` from every active state, but there is deliberately no direct `RESCUING->AVAILABLE` FSM edge: a mid-rescue boat must not teleport to `AVAILABLE`. Cancel routes that state via `RESCUING->RETURNING->AVAILABLE` (both hops logged with reason + tick + actor).
+- Residual edge case for Phase 4: cancelling a boat with passengers aboard parks them on a `RETURNING→AVAILABLE` boat. The passenger-recovery workflow must account for cancelled-not-failed boats carrying passengers.

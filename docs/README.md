@@ -24,7 +24,9 @@ Source: `../flood_rescue_dispatch_mvp_architecture_web_mobile_v2.md` (§16 roadm
 
 ## Status
 
-- [ ] Phase 1
+- [x] Phase 1 — done: baseline seed 42 → 13/13 served, run ends tick 40 (exit 0); `pytest backend/tests -q` 33 passed (models, routing, lifecycle, engine smoke, snapshot round-trip + restore-continue).
+- [x] Phase 2 — done: greedy central scheduler (propose→resolve→feasible→validate→commit) replaced the stub; baseline seed 42 → 13/13 served, 13 COMMITTED, 1 REJECTED (`RESOURCE_CLAIMED:HIGHER_RANK`); all feasible incidents COMMITTED within N=25 ticks; `pytest backend/tests -q` 94 passed (dispatch, bid scoring, commitments, safety invariants).
+- [x] Phase 3 — done: negotiation scheduler behind the same `Scheduler` protocol (`--strategy centralized|negotiation`); both strategies seed 42 → 13/13 served, 13 COMMITTED, 0 closed-edge moves, deterministic winners, `ACKNOWLEDGED` distinct from `COMMITTED`; agents decide from local beliefs only (no global-World access); `pytest backend/tests -q` 127 passed.
 - [ ] Phase 2
 - [ ] Phase 3
 - [ ] Phase 4

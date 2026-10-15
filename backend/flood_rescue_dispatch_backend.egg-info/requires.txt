@@ -1,0 +1,10 @@
+fastapi
+pydantic>=2
+networkx
+
+[dev]
+ruff
+pytest
+
+[test]
+pytest

@@ -31,6 +31,7 @@ Companion to `../AGENTS.md`. Follow these unless a phase step explicitly overrid
 - `G_t=(V,E_t)`. Edge: `{edge_id, from_node, to_node, mode: road|water, travel_time, status: open|closed|disputed, risk_level 0-1, capacity, last_updated_tick}`.
 - Modes: boats → water only; ground teams → road only; multi-stage via transfer points. Fuel must satisfy reserve policy. Shelter: `occupancy + reservations <= capacity` (track separately).
 - Incident lifecycle: `OPEN → ASSIGNED → IN_PROGRESS → SERVED | CANCELLED | UNRESOLVED`. Boat lifecycle: `AVAILABLE → ASSIGNED → EN_ROUTE_TO_INCIDENT → RESCUING → TRANSPORTING_TO_SHELTER → RECOVERY → AVAILABLE` (+ `UNAVAILABLE/FAILED/STRANDED/RETURNING/MAINTENANCE`).
+- Cancel routing: `cancel()` end state is `AVAILABLE` from every active state, but no direct `RESCUING→AVAILABLE` edge exists by design — mid-rescue boats route via `RETURNING`. Conflict rejections cite the winning `proposal_id` (`RESOURCE_CONFLICT:WINNER=<proposal_id>`); the `proposal_id→assignment_id` link lives in each `COMMITTED` log entry.
 - Engine tick order (document any deviation): advance clock → apply flood/infra events → update world → deliver due messages → update local beliefs → move resources on valid routes → update incidents/shelters → detect invalid commitments → cancel/suspend/mark `REQUIRES_RECONCILIATION` → propose/bid → resolve + safety-validate → commit → queue outbound → record events/metrics/snapshots → publish WS.
 - Seeds: every scenario JSON has `random_seed`, `flood_progression`, `speeds`, `comm_reliability`, `shelter_capacity`.
 
