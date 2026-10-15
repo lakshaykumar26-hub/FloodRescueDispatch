@@ -47,7 +47,11 @@ def validate(
        resource kind incompatible with ``required_capabilities``;
        empty capabilities = no constraint) -> ``MODE_MISMATCH``
     4. route safety, one entry per bad edge via ``is_route_valid``
-       (``EDGE_CLOSED:<id>`` / ``UNKNOWN_EDGE:<id>`` / ``ZERO_CAPACITY:<id>``)
+       (``EDGE_CLOSED:<id>`` / ``UNKNOWN_EDGE:<id>`` / ``ZERO_CAPACITY:<id>``),
+       plus one ``EDGE_DISPUTED:<id>`` per disputed edge (conflicting
+       reports, Phase 4 Step 04: conservative routing rejects new commits
+       over disputed edges; in-flight movement may still traverse them
+       with a warning)
     5. resource not AVAILABLE or already owned -> ``RESOURCE_UNAVAILABLE``
     6. conflicting active assignment on the same resource ->
        ``ASSIGNMENT_CONFLICT``
@@ -98,6 +102,14 @@ def validate(
         ok, code = is_route_valid(world, [eid], mode)  # type: ignore[arg-type]
         if not ok and code != "MODE_MISMATCH":
             violations.append(code)
+
+    # 4b. Disputed edges (Phase 4 Step 04): conflicting reports with no newer
+    # CONFIRMED OPEN reject NEW commits conservatively, collected alongside
+    # the other route violations above.
+    for eid in proposal.route_edge_ids:
+        edge = world.edges.get(eid)
+        if edge is not None and edge.status == "disputed":
+            violations.append(f"EDGE_DISPUTED:{eid}")
 
     # 5. Resource availability.
     if resource is not None:

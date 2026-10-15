@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from .event_scheduler import EventScheduler
+from ..dispatch.report_store import ReportStore
 from .world import Incident, World
 
 # -- resource lifecycles (Phase 1 Step 05) --------------------------------
@@ -68,6 +69,10 @@ class StateManager:
         self.event_log: list[dict] = []
         # resource_id -> {edge_ids: [...], next_index: int, dest: str}
         self.routes: dict[str, dict] = {}
+        # Phase 4 Step 04/05: append-only store for contradictory edge
+        # reports (scheduler REPORT events file claims here via the
+        # engine; never auto-closes edges — see ReportStore).
+        self.reports = ReportStore()
 
     # -- logging --------------------------------------------------------
     def _log(self, tick: int, kind: str, actor: str, detail: dict) -> dict:
@@ -99,8 +104,21 @@ class StateManager:
         """Dispatch one scheduler event onto the world.
 
         ``CLOSURE`` -> :meth:`apply_closure`,
-        ``INCIDENT_ARRIVAL`` -> :meth:`apply_incident`; anything else is
-        logged as ``IGNORED`` and never raises.
+        ``BRIDGE_CLOSURE`` -> :meth:`apply_closure` (reason ``bridge``),
+        ``EDGE_REOPEN`` -> :meth:`apply_reopen`,
+        ``FLOOD_RISE`` -> :meth:`apply_flood_rise`,
+        ``INCIDENT_ARRIVAL`` -> :meth:`apply_incident`,
+        ``BOAT_FAILURE`` -> :meth:`fail_boat`,
+        ``SHELTER_FULL`` -> :meth:`apply_shelter_full`,
+        ``COMMS_NOTE`` -> audit-only ``COMMS_NOTE`` log (no state change);
+        anything else is logged as ``IGNORED`` and never raises.
+
+        Tick ordering: a closure/reopen/rise at tick T applies before
+        movement in tick T (the engine pops due events first each tick).
+        Assignment-status transitions for affected routes
+        (``REQUIRES_RECONCILIATION``/``CANCELLED``) belong to the Step 05
+        pipeline, which calls the :mod:`dispatch.route_replanner`
+        detection/replan primitives provided here.
         """
         tick, kind, payload, event_id, raw = self._coerce(event)
         if tick is None:
@@ -116,6 +134,47 @@ class StateManager:
                 )
                 return
             self.apply_closure(edge_id, tick, actor)
+        elif kind == "BRIDGE_CLOSURE":
+            edge_id = payload.get("edge_id")
+            if edge_id is None and isinstance(raw, dict):
+                edge_id = raw.get("edge_id")
+            if edge_id is None:
+                self._log(
+                    tick, "IGNORED", actor,
+                    {"reason": "closure_missing_edge_id", "event_id": event_id},
+                )
+                return
+            self.apply_closure(edge_id, tick, actor, reason="bridge")
+        elif kind == "EDGE_REOPEN":
+            edge_id = payload.get("edge_id")
+            if edge_id is None and isinstance(raw, dict):
+                edge_id = raw.get("edge_id")
+            if edge_id is None:
+                self._log(
+                    tick, "IGNORED", actor,
+                    {"reason": "reopen_missing_edge_id", "event_id": event_id},
+                )
+                return
+            self.apply_reopen(edge_id, tick, actor)
+        elif kind == "FLOOD_RISE":
+            edge_ids = payload.get("edge_ids")
+            if edge_ids is None and isinstance(raw, dict):
+                edge_ids = raw.get("edge_ids")
+            risk_delta = payload.get("risk_delta")
+            if risk_delta is None and isinstance(raw, dict):
+                risk_delta = raw.get("risk_delta")
+            if (
+                not isinstance(edge_ids, list)
+                or not all(isinstance(eid, str) for eid in edge_ids)
+                or isinstance(risk_delta, bool)
+                or not isinstance(risk_delta, (int, float))
+            ):
+                self._log(
+                    tick, "IGNORED", actor,
+                    {"reason": "flood_rise_bad_payload", "event_id": event_id},
+                )
+                return
+            self.apply_flood_rise(edge_ids, float(risk_delta), tick, actor)
         elif kind == "INCIDENT_ARRIVAL":
             data = dict(payload)
             if not data and isinstance(raw, dict):
@@ -124,14 +183,58 @@ class StateManager:
                     if k not in ("tick", "kind", "payload", "event_id", "data")
                 }
             self.apply_incident(data, tick, actor)
+        elif kind == "BOAT_FAILURE":
+            boat_id = payload.get("boat_id")
+            if boat_id is None and isinstance(raw, dict):
+                boat_id = raw.get("boat_id")
+            if not isinstance(boat_id, str):
+                self._log(
+                    tick, "IGNORED", actor,
+                    {"reason": "boat_failure_missing_boat_id", "event_id": event_id},
+                )
+                return
+            self.fail_boat(boat_id, tick, actor)
+        elif kind == "SHELTER_FULL":
+            shelter_id = payload.get("shelter_id")
+            if shelter_id is None and isinstance(raw, dict):
+                shelter_id = raw.get("shelter_id")
+            if not isinstance(shelter_id, str):
+                self._log(
+                    tick, "IGNORED", actor,
+                    {"reason": "shelter_full_missing_shelter_id", "event_id": event_id},
+                )
+                return
+            self.apply_shelter_full(shelter_id, tick, actor)
+        elif kind == "COMMS_NOTE":
+            # Phase 4 Step 05: operator/comms annotation (e.g. simulated
+            # partition cue for Phase 5). Audit-only: no state change.
+            # Malformed payloads (missing/non-string message) are IGNORED.
+            message = payload.get("message")
+            if message is None and isinstance(raw, dict):
+                message = raw.get("message")
+            if not isinstance(message, str):
+                self._log(
+                    tick, "IGNORED", actor,
+                    {"reason": "comms_note_bad_payload", "event_id": event_id},
+                )
+                return
+            self._log(tick, "COMMS_NOTE", actor, {"message": message})
         else:
             self._log(
                 tick, "IGNORED", actor,
                 {"reason": "unknown_kind", "kind": kind, "event_id": event_id},
             )
 
-    def apply_closure(self, edge_id: str, tick: int, actor: str = "scheduler") -> None:
-        """Close one edge and record when it changed."""
+    def apply_closure(
+        self, edge_id: str, tick: int, actor: str = "scheduler",
+        reason: str | None = None,
+    ) -> None:
+        """Close one edge and record when it changed.
+
+        ``reason`` (e.g. ``"bridge"`` for ``BRIDGE_CLOSURE`` events) is
+        recorded in the ``CLOSURE`` log detail when given; plain
+        ``CLOSURE`` events log exactly ``{"edge_id": ...}`` as before.
+        """
         edge = self.world.edges.get(edge_id)
         if edge is None:
             self._log(
@@ -141,7 +244,51 @@ class StateManager:
             return
         edge.status = "closed"
         edge.last_updated_tick = tick
-        self._log(tick, "CLOSURE", actor, {"edge_id": edge_id})
+        detail: dict = {"edge_id": edge_id}
+        if reason is not None:
+            detail["reason"] = reason
+        self._log(tick, "CLOSURE", actor, detail)
+
+    def apply_reopen(self, edge_id: str, tick: int, actor: str = "scheduler") -> None:
+        """Reopen one edge and record when it changed.
+
+        Unknown edges log ``IGNORED`` and never raise. Detection of which
+        routes may reuse the edge, and any assignment-status transitions,
+        belong to the Step 05 pipeline (see
+        :mod:`dispatch.route_replanner` primitives).
+        """
+        edge = self.world.edges.get(edge_id)
+        if edge is None:
+            self._log(
+                tick, "IGNORED", actor,
+                {"reason": "unknown_edge", "edge_id": edge_id},
+            )
+            return
+        edge.status = "open"
+        edge.last_updated_tick = tick
+        self._log(tick, "EDGE_REOPENED", actor, {"edge_id": edge_id})
+
+    def apply_flood_rise(
+        self, edge_ids: list[str], risk_delta: float, tick: int,
+        actor: str = "scheduler",
+    ) -> None:
+        """Raise ``risk_level`` by ``risk_delta`` on each listed edge.
+
+        Levels clamp to ``[0, 1]`` and ``last_updated_tick`` advances on
+        every touched edge; exactly one ``FLOOD_RISE`` log records
+        ``{edge_ids, risk_delta}``. Unknown edge IDs are skipped (they
+        cannot be bumped) and never raise.
+        """
+        for edge_id in edge_ids:
+            edge = self.world.edges.get(edge_id)
+            if edge is None:
+                continue
+            edge.risk_level = min(1.0, max(0.0, edge.risk_level + risk_delta))
+            edge.last_updated_tick = tick
+        self._log(
+            tick, "FLOOD_RISE", actor,
+            {"edge_ids": list(edge_ids), "risk_delta": risk_delta},
+        )
 
     def apply_incident(self, data: dict, tick: int, actor: str = "scheduler") -> None:
         """Construct an :class:`Incident` from ``data`` and add it to the world."""
@@ -154,7 +301,80 @@ class StateManager:
             {"incident_id": incident.incident_id, "node_id": incident.node_id},
         )
 
+    # -- boat failure (Phase 4 Step 02) ---------------------------------
+    def fail_boat(self, boat_id: str, tick: int, actor: str = "scheduler") -> dict:
+        """Fail a boat, keeping its passengers aboard for recovery.
+
+        Sets status ``FAILED`` via :meth:`transition_boat` (which sets
+        ``needs_recovery`` when ``passengers > 0`` and never zeroes them).
+        The active assignment (if any) is NOT cancelled here — the caller
+        (``dispatch.commitment_manager.trigger_recovery``) owns that — so
+        this only flags: the outcome records ``had_assignment`` (the
+        ``assignment_id`` the boat held, or ``None``) and ``passengers``,
+        and logs ``BOAT_FAILED`` with reason + tick + actor.
+
+        Recovery incidents are created by the caller, hence
+        ``recovery_incident_id`` is always ``None`` at this level (the key
+        exists so Step 05's engine wiring can fill it in). Unknown boats
+        log ``IGNORED`` and return ``{"error": "UNKNOWN_BOAT"}``; never
+        raises.
+        """
+        boat = self.world.boats.get(boat_id)
+        if boat is None:
+            self._log(
+                tick, "IGNORED", actor,
+                {"reason": "unknown_boat", "boat_id": boat_id},
+            )
+            return {
+                "boat_id": boat_id,
+                "had_assignment": None,
+                "passengers": 0,
+                "recovery_incident_id": None,
+                "error": "UNKNOWN_BOAT",
+            }
+        had_assignment = boat.assignment_id
+        passengers = boat.passengers
+        self.transition_boat(
+            boat_id, "FAILED", f"boat {boat_id} failed", tick, actor=actor
+        )
+        self._log(
+            tick, "BOAT_FAILED", actor,
+            {"boat_id": boat_id, "passengers": passengers,
+             "assignment_id": had_assignment},
+        )
+        return {
+            "boat_id": boat_id,
+            "had_assignment": had_assignment,
+            "passengers": passengers,
+            "recovery_incident_id": None,
+        }
+
     # -- routes / movement ----------------------------------------------
+    def apply_shelter_full(
+        self, shelter_id: str, tick: int, actor: str = "scheduler"
+    ) -> None:
+        """Mark a shelter full: it stops accepting new reservations.
+
+        Sets ``accepting=False`` (existing holds and occupancy are
+        untouched) and logs ``SHELTER_FULL`` with ``{shelter_id,
+        occupancy, capacity}``. Unknown shelters log ``IGNORED`` and never
+        raise. Detection of affected assignments and any reassignment
+        belong to the Step 05 pipeline, which calls the
+        :mod:`dispatch.commitment_manager` destination-swap helper.
+        """
+        shelter = self.world.shelters.get(shelter_id)
+        if shelter is None:
+            self._log(
+                tick, "IGNORED", actor,
+                {"reason": "unknown_shelter", "shelter_id": shelter_id},
+            )
+            return
+        shelter.accepting = False
+        self._log(
+            tick, "SHELTER_FULL", actor,
+            {"shelter_id": shelter_id, "occupancy": shelter.occupancy,
+             "capacity": shelter.capacity},
+        )
     def set_route(
         self,
         resource_id: str,

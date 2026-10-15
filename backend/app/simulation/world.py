@@ -58,6 +58,11 @@ class Incident(BaseModel):
     created_tick: int = Field(default=0, ge=0)
     status: IncidentStatus = "OPEN"
     report_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    # Phase 4 Step 02: recovery requests ride the normal incident pipeline
+    # (urgency 5, capabilities ["boat"]) but stay linked to the failed
+    # assignment that stranded the passengers.
+    kind: Literal["standard", "recovery"] = "standard"
+    caused_by: Optional[str] = None
 
 
 class Boat(BaseModel):
@@ -89,6 +94,11 @@ class Shelter(BaseModel):
     capacity: int = Field(gt=0)
     occupancy: int = Field(default=0, ge=0)
     reservations: dict[str, int] = Field(default_factory=dict)
+    # Phase 4 Step 03: overflow flag. False once SHELTER_FULL fires (or
+    # occupancy reaches capacity via checkins); reserve() then refuses and
+    # World.shelter_remaining() reports 0 so schedulers skip it naturally.
+    # Defaults True so older scenario JSON round-trips unchanged.
+    accepting: bool = True
     history: list[dict] = Field(default_factory=list)
 
     def remaining(self) -> int:
@@ -99,15 +109,23 @@ class Shelter(BaseModel):
         """Promise ``seats`` to ``assignment_id`` unless it would overbook.
 
         Returns True and records the reservation on success; returns False
-        (no mutation) when seats <= 0 or occupancy + reservations + seats
-        would exceed capacity. Both outcomes append a history entry carrying
-        ``tick`` and ``reason`` so failures are auditable.
+        (no mutation) when seats <= 0, the shelter is not accepting, or
+        occupancy + reservations + seats would exceed capacity. Both
+        outcomes append a history entry carrying ``tick`` and ``reason``
+        so failures are auditable.
         """
         if seats <= 0:
             self.history.append(
                 {"tick": tick, "actor": "shelter", "event": "reserve_failed",
                  "assignment_id": assignment_id, "seats": seats,
                  "reason": "REJECTED:INVALID_SEATS"}
+            )
+            return False
+        if not self.accepting:
+            self.history.append(
+                {"tick": tick, "actor": "shelter", "event": "reserve_failed",
+                 "assignment_id": assignment_id, "seats": seats,
+                 "reason": "REJECTED:SHELTER_NOT_ACCEPTING"}
             )
             return False
         if self.occupancy + sum(self.reservations.values()) + seats > self.capacity:
@@ -138,6 +156,13 @@ class Shelter(BaseModel):
                  "assignment_id": assignment_id, "seats": seats,
                  "reason": "OK"}
             )
+            if self.occupancy >= self.capacity and self.accepting:
+                self.accepting = False
+                self.history.append(
+                    {"tick": tick, "actor": "shelter", "event": "shelter_full",
+                     "assignment_id": assignment_id, "seats": seats,
+                     "reason": "SHELTER_FULL:OCCUPANCY_AT_CAPACITY"}
+                )
             return seats
         self.history.append(
             {"tick": tick, "actor": "shelter", "event": "checkin_failed",
@@ -196,8 +221,15 @@ class World(BaseModel):
         return out
 
     def shelter_remaining(self, shelter_id: str) -> int:
-        """capacity - occupancy - sum(reservations); may be negative (overbooked)."""
+        """capacity - occupancy - sum(reservations); may be negative (overbooked).
+
+        A shelter that stopped accepting (SHELTER_FULL) reports 0 so
+        schedulers, ``shelter_options``, and the feasibility/safety gates
+        skip it naturally without special-casing.
+        """
         shelter = self.shelters[shelter_id]
+        if not shelter.accepting:
+            return 0
         return shelter.capacity - shelter.occupancy - sum(shelter.reservations.values())
 
     def to_dict(self) -> dict:

@@ -45,6 +45,10 @@ def check_feasible(
     3. transport-mode / capability mismatch -> ``MODE_MISMATCH``
     4. route invalid -> exact code from ``is_route_valid``
        (e.g. ``EDGE_CLOSED:<id>``, ``UNKNOWN_EDGE:<id>``)
+       4b. route crosses a ``disputed`` edge (conflicting reports, Phase 4
+       Step 04) -> ``EDGE_DISPUTED:<id>`` (conservative: new commits avoid
+       disputed edges; in-flight movement may still traverse them with a
+       warning logged by ``StateManager.advance_positions``)
     5. boat fuel ``< eta + reserve`` -> ``FUEL_INSUFFICIENT``
     6. seats over boat capacity -> ``OVER_CAPACITY``
     7. shelter unknown / full -> ``SHELTER_UNKNOWN`` / ``SHELTER_FULL``
@@ -85,6 +89,16 @@ def check_feasible(
     ok, code = is_route_valid(world, route_edge_ids, mode)  # type: ignore[arg-type]
     if not ok:
         return (False, code)
+
+    # Phase 4 Step 04 (contradictory reports): a `disputed` edge is treated
+    # as closed for NEW proposals -- conservative routing. In-flight
+    # movement may still traverse disputed edges with a warning
+    # (StateManager.advance_positions logs DISPUTED_EDGE_WARNING); new
+    # commits must avoid them.
+    for eid in route_edge_ids:
+        edge = world.edges.get(eid)
+        if edge is not None and edge.status == "disputed":
+            return (False, f"EDGE_DISPUTED:{eid}")
 
     if is_boat:
         assert boat is not None

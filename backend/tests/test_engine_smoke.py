@@ -118,9 +118,23 @@ def test_closure_blocks_route_no_traversal(tmp_path) -> None:
     blocked = [
         entry for entry in simulation.manager.event_log if entry["kind"] == "ROUTE_BLOCKED"
     ]
-    assert blocked, "expected ROUTE_BLOCKED entries after the injected closure"
-    assert any(
-        entry["detail"].get("edge_id") == closed_edge for entry in blocked
+    # STEP-05 UPDATE: the Step 05 pipeline replans live routes around a
+    # closure when an alternate exists, so a hold is no longer
+    # guaranteed. Either outcome is safe: hold on the closed edge, or
+    # an in-place REPLAN whose old legs used it. (No-alternate worlds
+    # still hold — see test_closure_applies_before_movement_same_tick,
+    # unchanged.)
+    blocked_on_edge = [
+        entry for entry in blocked if entry["detail"].get("edge_id") == closed_edge
+    ]
+    replanned_around = [
+        entry
+        for entry in simulation.manager.event_log
+        if entry["kind"] == "REPLAN"
+        and closed_edge in entry["detail"].get("old_route", [])
+    ]
+    assert blocked_on_edge or replanned_around, (
+        "expected a hold or an in-place replan for the closed edge"
     )
     # World-state walk: no resource may traverse the closed edge at or
     # after the closure tick.

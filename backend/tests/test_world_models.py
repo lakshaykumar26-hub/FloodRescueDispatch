@@ -66,7 +66,7 @@ def test_entities_construct_from_json() -> None:
          "sender_id": "DISPATCH-01", "recipient_id": "BOAT-03",
          "simulation_id": "SIM-001", "created_at_tick": 42,
          "expires_at_tick": 52, "version": 3,
-         "payload": {"assignment_id": "ASN-00031"}}
+         "payload": {"assignment_id": "ASN-00031", "incident_id": "INC-08"}}
     )
     assert message.version == 3
 
