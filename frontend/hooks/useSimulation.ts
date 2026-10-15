@@ -53,7 +53,7 @@ export interface UseSimulation {
   start: () => Promise<void>;
   pause: () => Promise<void>;
   step: (steps?: number) => Promise<void>;
-  inject: (kind: string, payload: Record<string, unknown>) => Promise<void>;
+  inject: (kind: string, payload: Record<string, unknown>) => Promise<number | null>;
   replay: (fromSnapshotTick?: number) => Promise<void>;
   refresh: () => Promise<void>;
   setStrategy: (s: Strategy) => void;
@@ -262,13 +262,15 @@ export function useSimulation(): UseSimulation {
 
   const inject = useCallback(
     async (kind: string, payload: Record<string, unknown>) => {
-      if (guardDemo()) return;
+      if (guardDemo()) return null;
       const id = simIdRef.current!;
       try {
-        await injectEvent(id, { kind, payload });
+        const result = await injectEvent(id, { kind, payload });
         await refresh();
+        return result.scheduled_tick;
       } catch (e) {
         setError(e instanceof Error ? e.message : "inject failed");
+        return null;
       }
     },
     [guardDemo, refresh],

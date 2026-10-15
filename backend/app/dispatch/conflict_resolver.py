@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .scheduler_interface import ProposedAssignment, rank_key
+from .scheduler_interface import ProposedAssignment, incident_zone_risk, rank_key
 
 if TYPE_CHECKING:
     from ..simulation.world import World
@@ -34,7 +34,8 @@ def _incident_rank(proposal: ProposedAssignment, world: World, tick: int) -> tup
         people = proposal.seats
         created = proposal.created_tick
     waiting = tick - created
-    return rank_key(urgency, waiting, people, proposal.incident_id)
+    zone_risk = incident_zone_risk(world, incident) if incident is not None else 0.0
+    return rank_key(urgency, waiting, people, proposal.incident_id, zone_risk)
 
 
 def resolve(

@@ -26,7 +26,7 @@ from .run import build_simulation
 
 # Injection kinds applied straight to the network config (never through the
 # tick scheduler, whose ``apply_event`` would log them IGNORED).
-PARTITION_KINDS = frozenset({"PARTITION"})
+PARTITION_KINDS = frozenset({"PARTITION", "PARTITION_HEAL"})
 
 
 def apply_partition(sim: Simulation, payload: dict) -> None:
@@ -52,10 +52,41 @@ def apply_partition(sim: Simulation, payload: dict) -> None:
     sim.network.partitions.append(span)
 
 
+def apply_heal(sim: Simulation, payload: dict, tick: int) -> int:
+    """End active partition spans for one agent at ``tick``."""
+    agent_id = str(payload.get("agent_id", ""))
+    healed = 0
+    survivors: list[dict] = []
+    for span in sim.network.partitions:
+        agents = list(span.get("agents", []))
+        if agent_id in agents and span.get("from_tick", 0) <= tick <= span.get("to_tick", -1):
+            healed += 1
+            remaining = [agent for agent in agents if agent != agent_id]
+            if remaining:
+                survivors.append({**span, "agents": remaining})
+        else:
+            survivors.append(span)
+    sim.network.partitions[:] = survivors
+    return healed
+
+
 def apply_injection(
     sim: Simulation, kind: str, payload: dict, tick: int, event_id: str
 ) -> None:
     """Apply one recorded injection to ``sim`` (scheduler or network)."""
+    if kind == "PARTITION_HEAL":
+        healed = apply_heal(sim, payload, tick)
+        sim.manager._log(
+            int(tick),
+            "COMMS_NOTE",
+            "replay",
+            {
+                "message": f"partition heal {event_id}: {healed} span(s) ended"
+                if healed else f"partition heal {event_id}: no active span (no-op)",
+                "event_id": event_id,
+            },
+        )
+        return
     if kind in PARTITION_KINDS:
         apply_partition(sim, payload)
         sim.manager._log(
@@ -175,6 +206,7 @@ def winners_signature(sim: Simulation) -> list[tuple]:
 
 __all__ = [
     "PARTITION_KINDS",
+    "apply_heal",
     "apply_injection",
     "apply_partition",
     "event_signature",

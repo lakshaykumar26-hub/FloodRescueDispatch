@@ -26,6 +26,7 @@ from .scheduler_interface import (
     Assignment,
     ProposedAssignment,
     Weights,
+    incident_zone_risk,
     rank_key,
 )
 
@@ -53,7 +54,11 @@ class CentralizedScheduler:
         ranked = sorted(
             incidents,
             key=lambda inc: rank_key(
-                inc.urgency, tick - inc.created_tick, inc.people, inc.incident_id
+                inc.urgency,
+                tick - inc.created_tick,
+                inc.people,
+                inc.incident_id,
+                incident_zone_risk(world, inc),
             ),
         )
         claimed: set[str] = set()
@@ -146,7 +151,10 @@ class CentralizedScheduler:
                         "seats": seats,
                     }
             if best is not None and best_payload is not None:
-                reasons = ["RANK_SELECTED"]
+                reasons = [
+                    "RANK_SELECTED",
+                    f"ZONE_RISK:{incident_zone_risk(world, inc):.2f}",
+                ]
                 if multi_stage:
                     reasons.append("MULTI_STAGE:BOAT_LEG_ONLY")
                 route = best_payload["route"]

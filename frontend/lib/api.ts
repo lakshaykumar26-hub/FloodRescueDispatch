@@ -371,12 +371,16 @@ export async function getCommunications(id: string): Promise<CommsState> {
 export async function injectEvent(
   id: string,
   evt: { kind: string; payload: Record<string, unknown>; event_id?: string; tick?: number },
-): Promise<{ event_id: string; tick: number }> {
+): Promise<{ event_id: string; tick: number; scheduled_tick: number }> {
   const raw = await req<Record<string, unknown>>(`/api/simulations/${id}/events`, {
     method: "POST",
     body: JSON.stringify(evt),
   });
-  return { event_id: str(raw.event_id), tick: num(raw.tick) };
+  return {
+    event_id: str(raw.event_id),
+    tick: num(raw.tick),
+    scheduled_tick: num(raw.scheduled_tick, num(raw.tick) + 1),
+  };
 }
 
 export async function replaySimulation(id: string, fromSnapshotTick?: number) {

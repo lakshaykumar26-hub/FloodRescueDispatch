@@ -1,248 +1,117 @@
 "use client";
 
-/**
- * Pure-SVG synthetic map. No tile/network dependency: renders entirely from
- * scenario node x/y, so blocking map tiles cannot break it (Phase 6 gate).
- */
-import { useEffect, useMemo, useState } from "react";
-import type { Edge, WorldState } from "../types";
+import { useMemo } from "react";
+import type { SimEvent, WorldState } from "../types";
 
 const W = 760;
 const H = 640;
-const PAD = 44;
-
-function project(x: number, y: number, maxX: number, maxY: number): [number, number] {
-  const sx = (v: number, m: number) => PAD + (v / Math.max(m, 1)) * (W - 2 * PAD);
-  // Flip y so larger y is lower on screen (matches scenario layout roughly).
-  const sy = (v: number, m: number) => PAD + (v / Math.max(m, 1)) * (H - 2 * PAD);
-  return [sx(x, maxX), sy(y, maxY)];
-}
+const PAD = 76;
 
 interface Props {
   world: WorldState;
+  events?: SimEvent[];
   selectedRouteEdgeIds?: string[];
   changedRouteEdgeIds?: string[];
   selectedIncidentId?: string | null;
   selectedResourceId?: string | null;
   disconnectedIds?: string[];
-  /** Current tick: markers glide on world change; incidents created this
-   * tick ping until the next tick. Omit to render statically. */
   tick?: number;
+  motionDurationMs?: number;
   onSelectIncident?: (id: string) => void;
   onSelectResource?: (id: string) => void;
 }
 
-export default function SyntheticMap({
-  world,
-  selectedRouteEdgeIds = [],
-  changedRouteEdgeIds = [],
-  selectedIncidentId = null,
-  selectedResourceId = null,
-  disconnectedIds = [],
-  tick,
-  onSelectIncident,
-  onSelectResource,
-}: Props) {
-  // Enable glide transitions only after first paint so the initial render
-  // does not animate markers flying in from the origin.
-  const [glide, setGlide] = useState(false);
-  useEffect(() => {
-    const id = window.setTimeout(() => setGlide(true), 80);
-    return () => window.clearTimeout(id);
-  }, []);
-  const nodePos = useMemo(() => {
-    const maxX = Math.max(1, ...world.nodes.map((n) => n.x));
-    const maxY = Math.max(1, ...world.nodes.map((n) => n.y));
-    const m = new globalThis.Map<string, [number, number]>();
-    for (const n of world.nodes) m.set(n.node_id, project(n.x, n.y, maxX, maxY));
-    return m;
+export default function SyntheticMap({ world, events = [], selectedIncidentId = null, tick, motionDurationMs = 1000, onSelectIncident }: Props) {
+  const positions = useMemo(() => {
+    const maxX = Math.max(1, ...world.nodes.map((node) => node.x));
+    const maxY = Math.max(1, ...world.nodes.map((node) => node.y));
+    const result = new Map<string, [number, number]>();
+    for (const node of world.nodes) {
+      result.set(node.node_id, [PAD + (node.x / maxX) * (W - 2 * PAD), PAD + (node.y / maxY) * (H - 2 * PAD)]);
+    }
+    return result;
   }, [world.nodes]);
 
-  const edgeById = useMemo(() => {
-    const m = new globalThis.Map<string, Edge>();
-    for (const e of world.edges) m.set(e.edge_id, e);
-    return m;
-  }, [world.edges]);
-
-  const selectedSet = useMemo(() => new Set(selectedRouteEdgeIds), [selectedRouteEdgeIds]);
-  const changedSet = useMemo(() => new Set(changedRouteEdgeIds), [changedRouteEdgeIds]);
-  const disconnectedSet = useMemo(() => new Set(disconnectedIds), [disconnectedIds]);
-
-  const incidentByNode = useMemo(() => {
-    const m = new globalThis.Map<string, typeof world.incidents>();
-    for (const i of world.incidents) {
-      const arr = m.get(i.node_id) ?? [];
-      arr.push(i);
-      m.set(i.node_id, arr);
-    }
-    return m;
-  }, [world.incidents]);
-
-  const boatByNode = useMemo(() => {
-    const m = new globalThis.Map<string, typeof world.boats>();
-    for (const b of world.boats) {
-      const arr = m.get(b.node_id) ?? [];
-      arr.push(b);
-      m.set(b.node_id, arr);
-    }
-    return m;
-  }, [world.boats]);
-
-  const urgencyColor = (u: number) =>
-    u >= 5 ? "#ef4444" : u >= 4 ? "#f97316" : u >= 3 ? "#eab308" : "#22c55e";
-
   return (
-    <div className="rounded border border-slate-700 bg-slate-900 p-2">
-      <div className="mb-1 flex flex-wrap gap-3 px-1 text-[11px] text-slate-300">
-        <span><span className="inline-block h-0 w-6 border-t-2 border-slate-400 align-middle" /> road</span>
-        <span><span className="inline-block h-0 w-6 border-t-2 border-sky-400 align-middle" /> waterway</span>
-        <span><span className="inline-block h-0 w-6 border-t-2 border-dashed border-red-500 align-middle" /> closed</span>
-        <span><span className="inline-block h-0 w-6 border-t-2 border-dotted border-amber-400 align-middle" /> disputed ⚠</span>
-        <span><span className="inline-block h-0 w-6 border-t-[3px] border-emerald-400 align-middle" /> planned route</span>
+    <div className="map-visual">
+      <div className="map-legend" aria-label="Map key">
+        <span><i className="legend-square legend-shelter" />S = Shelter</span>
+        <span><i className="legend-square legend-boat" />R = Rescuer</span>
+        <span><i className="legend-square legend-request" />INC = Incident</span>
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img" aria-label="Synthetic flood graph (offline SVG, no tiles)">
-        {/* edges */}
-        {world.edges.map((e) => {
-          const a = nodePos.get(e.from_node);
-          const b = nodePos.get(e.to_node);
+      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Map showing rescue requests, boats, shelters, and blocked roads">
+        {world.edges.map((edge, index) => {
+          const a = positions.get(edge.from_node);
+          const b = positions.get(edge.to_node);
           if (!a || !b) return null;
-          const isSelected = selectedSet.has(e.edge_id);
-          const isChanged = changedSet.has(e.edge_id);
-          let stroke = e.mode === "water" ? "#38bdf8" : "#94a3b8";
-          let dash: string | undefined;
-          let width = e.mode === "water" ? 2.5 : 2;
-          if (e.status === "closed") {
-            stroke = "#ef4444";
-            dash = "7 5";
-            width = 3;
-          } else if (e.status === "disputed") {
-            stroke = "#fbbf24";
-            dash = "2 4";
-            width = 3;
-          }
-          if (isSelected) {
-            stroke = "#34d399";
-            width = 4;
-          }
-          if (isChanged) {
-            stroke = "#c084fc";
-            width = 4;
-            dash = "10 3";
-          }
+          const closed = edge.status === "closed";
+          const midX = (a[0] + b[0]) / 2;
+          const midY = (a[1] + b[1]) / 2;
+          const dx = b[0] - a[0];
+          const dy = b[1] - a[1];
+          const length = Math.max(1, Math.hypot(dx, dy));
+          const labelOffset = ((index % 3) - 1) * 10;
+          const labelX = midX - (dy / length) * labelOffset;
+          const labelY = midY + (dx / length) * labelOffset;
           return (
-            <g key={e.edge_id}>
-              <title>{`${e.edge_id} ${e.mode} ${e.status} tt=${e.travel_time}`}</title>
-              <line
-                x1={a[0]}
-                y1={a[1]}
-                x2={b[0]}
-                y2={b[1]}
-                stroke={stroke}
-                strokeWidth={width}
-                strokeDasharray={isSelected || isChanged ? undefined : dash}
-                strokeLinecap="round"
-                className={isSelected ? "route-march" : isChanged ? "route-march-changed" : undefined}
-              />
-              {e.status === "disputed" && (
-                <text x={(a[0] + b[0]) / 2} y={(a[1] + b[1]) / 2 - 6} fontSize={13} textAnchor="middle">⚠</text>
-              )}
-              {e.status === "closed" && (
-                <text x={(a[0] + b[0]) / 2} y={(a[1] + b[1]) / 2 - 6} fontSize={11} textAnchor="middle" fill="#ef4444">✕</text>
-              )}
+            <g key={edge.edge_id}>
+              <line x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} stroke={closed ? "#d96758" : edge.mode === "water" ? "#91bfcb" : "#9aada6"} strokeWidth={closed ? 4 : edge.mode === "water" ? 2.5 : 2} strokeDasharray={closed ? "8 5" : edge.mode === "water" ? "4 4" : undefined} strokeLinecap="round" />
+              <text x={labelX} y={labelY} fontSize={11} fontWeight="bold" textAnchor="middle" dominantBaseline="central" fill={closed ? "#a43d32" : "#314c45"} stroke="#f5f9f7" strokeWidth={4} paintOrder="stroke">{edge.edge_id}</text>
             </g>
           );
         })}
-        {/* nodes */}
-        {world.nodes.map((n) => {
-          const p = nodePos.get(n.node_id);
-          if (!p) return null;
-          const fill = n.kind === "shelter" ? "#22c55e" : n.kind === "station" ? "#a78bfa" : n.kind === "transfer" ? "#f472b6" : "#334155";
+
+        {tick !== undefined && events.filter((event) => event.tick <= tick && event.tick >= tick - 2 && ["EDGE_CLOSED", "EDGE_DISPUTED", "BOAT_FAILED", "SHELTER_FULL", "INCIDENT_ARRIVAL"].includes(event.kind)).slice(-6).map((event, index) => {
+          const detail = event.detail;
+          const edgeId = typeof detail.edge_id === "string" ? detail.edge_id : undefined;
+          const edge = edgeId ? world.edges.find((item) => item.edge_id === edgeId) : undefined;
+          const incidentId = typeof detail.incident_id === "string" ? detail.incident_id : undefined;
+          const boatId = typeof detail.boat_id === "string" ? detail.boat_id : undefined;
+          const shelterId = typeof detail.shelter_id === "string" ? detail.shelter_id : undefined;
+          const nodeId = edge
+            ? undefined
+            : world.incidents.find((item) => item.incident_id === incidentId)?.node_id
+              ?? world.boats.find((item) => item.boat_id === boatId)?.node_id
+              ?? world.shelters.find((item) => item.shelter_id === shelterId)?.node_id;
+          const a = edge ? positions.get(edge.from_node) : undefined;
+          const b = edge ? positions.get(edge.to_node) : undefined;
+          const point = nodeId ? positions.get(nodeId) : undefined;
+          const x = a && b ? (a[0] + b[0]) / 2 : point?.[0];
+          const y = a && b ? (a[1] + b[1]) / 2 : point?.[1];
+          if (x === undefined || y === undefined) return null;
+          const color = event.kind === "INCIDENT_ARRIVAL" ? "#2788a6" : event.kind === "SHELTER_FULL" ? "#9066b0" : "#d45b49";
+          return <circle key={`${event.tick}-${event.kind}-${index}`} cx={x} cy={y} r={16} fill="none" stroke={color} strokeWidth={3} className="event-flash" aria-label={`${event.kind} at step ${event.tick}`} />;
+        })}
+
+        {world.nodes.filter((node) => node.kind === "shelter").map((node) => {
+          const point = positions.get(node.node_id);
+          if (!point) return null;
+          return <g key={node.node_id}><title>Shelter</title><circle cx={point[0]} cy={point[1]} r={14} fill="#48a879" stroke="#fff" strokeWidth={3} /><text x={point[0]} y={point[1] + 5} fontSize={15} fontWeight="bold" fill="#fff" textAnchor="middle">S</text></g>;
+        })}
+
+        {world.incidents.filter((incident) => incident.status !== "SERVED" && incident.status !== "CANCELLED").map((incident, index) => {
+          const point = positions.get(incident.node_id);
+          if (!point) return null;
+          const offset = 15 + (index % 3) * 5;
+          const fill = incident.urgency >= 5 ? "#c94335" : incident.urgency === 4 ? "#e87935" : incident.urgency === 3 ? "#d9a52f" : incident.urgency === 2 ? "#83a948" : "#378c68";
           return (
-            <g key={n.node_id}>
-              <title>{`${n.node_id} ${n.kind} (${n.neighborhood})`}</title>
-              <rect x={p[0] - 7} y={p[1] - 7} width={14} height={14} rx={n.kind === "shelter" ? 7 : 2} fill={fill} stroke="#0f172a" strokeWidth={1.5} />
-              <text x={p[0]} y={p[1] - 11} fontSize={9} fill="#cbd5e1" textAnchor="middle">{n.node_id}</text>
+            <g key={incident.incident_id} transform={`translate(${point[0]} ${point[1]})`} onClick={() => onSelectIncident?.(incident.incident_id)} style={{ cursor: onSelectIncident ? "pointer" : "default" }}>
+              <title>{`${incident.incident_id}, priority ${incident.urgency} of 5, ${incident.people} people, ${incident.status}`}</title>
+              {tick !== undefined && incident.created_tick === tick && <circle cx={offset} cy={12} r={15} fill="none" stroke={fill} strokeWidth={2} className="incident-ping" />}
+              <circle cx={offset} cy={12} r={selectedIncidentId === incident.incident_id ? 15 : 13} fill={fill} stroke="#fff" strokeWidth={selectedIncidentId === incident.incident_id ? 3 : 2} />
+              <text x={offset} y={16} fontSize={9} fontWeight="bold" textAnchor="middle" fill="#fff">INC</text>
             </g>
           );
         })}
-        {/* incidents */}
-        {world.incidents.filter((i) => i.status !== "SERVED" && i.status !== "CANCELLED").map((inc, idx) => {
-          const p = nodePos.get(inc.node_id);
-          if (!p) return null;
-          const ox = 14 + (idx % 3) * 4;
-          const selected = selectedIncidentId === inc.incident_id;
-          const justArrived = tick !== undefined && inc.created_tick >= tick;
-          return (
-            <g
-              key={inc.incident_id}
-              transform={`translate(${p[0]} ${p[1]})`}
-              className={glide ? "marker-glide" : undefined}
-              onClick={() => onSelectIncident?.(inc.incident_id)}
-              style={{ cursor: onSelectIncident ? "pointer" : "default" }}
-            >
-              <title>{`${inc.incident_id} u=${inc.urgency} ppl=${inc.people} ${inc.status}`}</title>
-              {justArrived && (
-                <circle cx={ox} cy={12} r={10} fill="none" stroke={urgencyColor(inc.urgency)} strokeWidth={2} className="incident-ping" />
-              )}
-              <circle cx={ox} cy={12} r={selected ? 11 : 8} fill={urgencyColor(inc.urgency)} stroke={selected ? "#fff" : "#0f172a"} strokeWidth={selected ? 2.5 : 1.5} />
-              <text x={ox} y={16} fontSize={9} fontWeight="bold" textAnchor="middle" fill="#0f172a">{inc.urgency}</text>
-              {inc.kind === "recovery" && (
-                <text x={ox + 10} y={8} fontSize={11}>🛟</text>
-              )}
-            </g>
-          );
-        })}
-        {/* boats */}
-        {world.boats.map((b) => {
-          const p = nodePos.get(b.node_id);
-          if (!p) return null;
-          const failed = b.status === "FAILED" || b.status === "STRANDED" || b.needs_recovery;
-          const disc = disconnectedSet.has(b.boat_id);
-          const selected = selectedResourceId === b.boat_id;
-          return (
-            <g
-              key={b.boat_id}
-              transform={`translate(${p[0]} ${p[1]})`}
-              className={glide ? "marker-glide" : undefined}
-              onClick={() => onSelectResource?.(b.boat_id)}
-              style={{ cursor: onSelectResource ? "pointer" : "default" }}
-            >
-              <title>{`${b.boat_id} ${b.status} fuel=${b.fuel}`}</title>
-              <rect x={-22} y={-22} width={17} height={13} rx={2} fill={failed ? "#ef4444" : disc ? "#64748b" : "#0ea5e9"} stroke={selected ? "#fff" : "#0f172a"} strokeWidth={selected ? 2.5 : 1.5} />
-              <text x={-13.5} y={-11.5} fontSize={7.5} textAnchor="middle" fill="#fff">⛵</text>
-              {(failed || disc) && (
-                <text x={-22} y={-24} fontSize={10}>{failed ? "🔥" : "📡✕"}</text>
-              )}
-            </g>
-          );
-        })}
-        {/* teams */}
-        {world.teams.map((t) => {
-          const p = nodePos.get(t.node_id);
-          if (!p) return null;
-          const selected = selectedResourceId === t.team_id;
-          return (
-            <g
-              key={t.team_id}
-              transform={`translate(${p[0]} ${p[1]})`}
-              className={glide ? "marker-glide" : undefined}
-              onClick={() => onSelectResource?.(t.team_id)}
-              style={{ cursor: onSelectResource ? "pointer" : "default" }}
-            >
-              <title>{`${t.team_id} ${t.status}`}</title>
-              <polygon
-                points="20,20 28,20 24,12"
-                fill="#facc15"
-                stroke={selected ? "#fff" : "#0f172a"}
-                strokeWidth={selected ? 2.5 : 1.5}
-              />
-            </g>
-          );
+
+        {[...world.boats, ...world.teams.map((team) => ({ boat_id: team.team_id, node_id: team.node_id, status: team.status, needs_recovery: false }))].map((rescuer, index) => {
+          const point = positions.get(rescuer.node_id);
+          if (!point) return null;
+          const dx = (index % 3) * 18 - 18;
+          const dy = Math.floor(index / 3) * 18;
+          return <g key={rescuer.boat_id} className="marker-glide" style={{ transitionDuration: `${motionDurationMs}ms` }} transform={`translate(${point[0] + dx} ${point[1] - 30 - dy})`}><title>Rescuer</title><circle r={13} fill="#286c87" stroke="#fff" strokeWidth={2} /><text y={5} fontSize={14} fontWeight="bold" textAnchor="middle" fill="#fff">R</text></g>;
         })}
       </svg>
-      <div className="px-1 text-[11px] text-slate-400">
-        {world.nodes.length} nodes · {world.edges.length} edges · {incidentByNode.size} incident sites · {boatByNode.size} boat positions · edge refs: {Array.from(edgeById.keys()).slice(0, 8).join(", ")}{world.edges.length > 8 ? "…" : ""}
-      </div>
     </div>
   );
 }

@@ -36,6 +36,7 @@ from .scheduler_interface import (
     Assignment,
     ProposedAssignment,
     Weights,
+    incident_zone_risk,
     rank_key,
 )
 
@@ -225,6 +226,7 @@ class NegotiationScheduler:
                 tick - incident.created_tick,
                 incident.people,
                 incident.incident_id,
+                incident_zone_risk(world, incident),
             ),
         )
 
@@ -249,6 +251,7 @@ class NegotiationScheduler:
                     tick - incident.created_tick,
                     incident.people,
                     incident.incident_id,
+                    incident_zone_risk(world, incident),
                 )
                 for incident in ranked
             }
@@ -402,7 +405,10 @@ class NegotiationScheduler:
         if resource_kind not in ("boat", "team"):
             resource_kind = "boat" if winner_agent in world.boats else "team"
 
-        reasons = ["NEGOTIATED"]
+        reasons = [
+            "NEGOTIATED",
+            f"ZONE_RISK:{incident_zone_risk(world, incident):.2f}",
+        ]
         if multi_stage:
             reasons.append("MULTI_STAGE:BOAT_LEG_ONLY")
 

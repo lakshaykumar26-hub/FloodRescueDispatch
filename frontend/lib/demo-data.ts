@@ -50,14 +50,9 @@ export const DEMO_WORLD: WorldState = {
     { incident_id: "INC-05", node_id: "N-12", urgency: 4, people: 5, required_capabilities: ["boat"], created_tick: 6, status: "OPEN", report_confidence: 0.6, kind: "standard", caused_by: null },
   ],
   boats: [
-    { boat_id: "BOAT-01", node_id: "N-03", capacity: 5, fuel: 52, fuel_reserve: 10, speed: 1, status: "EN_ROUTE_TO_INCIDENT", assignment_id: "ASN-00001", passengers: 0, needs_recovery: false, history: [] },
-    { boat_id: "BOAT-02", node_id: "N-11", capacity: 5, fuel: 44, fuel_reserve: 10, speed: 1, status: "FAILED", assignment_id: null, passengers: 2, needs_recovery: true, history: [] },
-    { boat_id: "BOAT-03", node_id: "N-02", capacity: 4, fuel: 60, fuel_reserve: 10, speed: 1, status: "AVAILABLE", assignment_id: null, passengers: 0, needs_recovery: false, history: [] },
+    { boat_id: "BOAT-01", node_id: "N-01", capacity: 5, fuel: 60, fuel_reserve: 10, speed: 1, status: "AVAILABLE", assignment_id: null, passengers: 0, needs_recovery: false, history: [] },
   ],
-  teams: [
-    { team_id: "TEAM-01", node_id: "N-07", capabilities: ["ground"], status: "ON_SCENE", assignment_id: "ASN-00002", history: [] },
-    { team_id: "TEAM-02", node_id: "N-05", capabilities: ["ground"], status: "AVAILABLE", assignment_id: null, history: [] },
-  ],
+  teams: [],
   shelters: [
     { shelter_id: "SHELTER-01", node_id: "N-21", capacity: 10, occupancy: 4, reservations: { "ASN-00001": 3 }, accepting: true, history: [] },
     { shelter_id: "SHELTER-02", node_id: "N-22", capacity: 8, occupancy: 8, reservations: {}, accepting: false, history: [] },

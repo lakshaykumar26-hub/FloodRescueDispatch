@@ -56,6 +56,8 @@ SCHEDULER_KINDS = frozenset(
         "REPORT",
         "COMMS_NOTE",
         "PARTITION",
+        "PARTITION_START",
+        "PARTITION_HEAL",
     }
 )
 
@@ -276,6 +278,31 @@ def inject_event(
         if from_tick > to_tick:
             raise ApiError(422, "BAD_PAYLOAD", "PARTITION from_tick > to_tick")
         data = {"agents": list(agents), "from_tick": from_tick, "to_tick": to_tick}
+    elif norm_kind == "PARTITION_START":
+        agent_id = data.get("agent_id")
+        if not isinstance(agent_id, str) or (
+            agent_id not in sim.world.boats and agent_id not in sim.world.teams
+        ):
+            raise ApiError(422, "UNKNOWN_AGENT", f"unknown agent: {agent_id!r}")
+        try:
+            duration = int(data.get("duration_ticks", 20))
+        except (TypeError, ValueError):
+            raise ApiError(422, "BAD_PAYLOAD", "PARTITION_START needs int duration_ticks") from None
+        if duration < 1:
+            raise ApiError(422, "BAD_PAYLOAD", "PARTITION_START duration_ticks must be >= 1")
+        norm_kind = "PARTITION"
+        data = {"agents": [agent_id], "from_tick": sim.tick, "to_tick": sim.tick + duration}
+    elif norm_kind == "PARTITION_HEAL":
+        agent_id = data.get("agent_id")
+        if not isinstance(agent_id, str) or (
+            agent_id not in sim.world.boats and agent_id not in sim.world.teams
+        ):
+            raise ApiError(422, "UNKNOWN_AGENT", f"unknown agent: {agent_id!r}")
+        data = {"agent_id": agent_id}
+
+    # Network changes take effect immediately and replay at this same tick.
+    if norm_kind in ("PARTITION", "PARTITION_HEAL"):
+        sched_tick = sim.tick
 
     entry["inject_seq"] = int(entry.get("inject_seq", 0)) + 1
     eid = event_id or f"EVT-INJECT-{entry['inject_seq']:04d}"
